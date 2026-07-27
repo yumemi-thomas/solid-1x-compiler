@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/compiler
+      - run: cargo fmt --manifest-path packages/compiler/Cargo.toml -- --check
+      - run: cargo clippy --manifest-path packages/compiler/Cargo.toml --features native-facts --all-targets
+      - run: cargo test --manifest-path packages/compiler/Cargo.toml --features native-facts
+
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/compiler
+      - run: pnpm install --frozen-lockfile
+      - name: Jest suite
+        run: pnpm run test
+      - name: Babel 1.x parity
+        run: pnpm run parity

@@ -1,0 +1,7 @@
+{
+  "name": "dom-expressions",
+  "version": "0.40.8",
+  "private": true,
+  "license": "MIT",
+  "sideEffects": false
+}

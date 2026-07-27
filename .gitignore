@@ -1,0 +1,18 @@
+**/node_modules/
+**/target/
+.pnpm-store/
+.DS_Store
+**/.DS_Store
+
+# napi build outputs in packages/compiler
+packages/compiler/*.node
+packages/compiler/browser.js
+packages/compiler/index.d.ts
+packages/compiler/compiler.wasi.cjs
+packages/compiler/compiler.wasi-browser.js
+packages/compiler/compiler.wasm32-wasi*.wasm
+packages/compiler/wasi-worker*.mjs
+
+# rollup output in the Babel oracle
+packages/babel-plugin-jsx-dom-expressions/index.js
+packages/babel-plugin-jsx-dom-expressions/dist/

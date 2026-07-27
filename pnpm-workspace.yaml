@@ -1,0 +1,10 @@
+packages:
+  - "packages/compiler"
+  - "packages/babel-plugin-jsx-dom-expressions"
+  - "packages/dom-expressions"
+
+allowBuilds:
+  "@parcel/watcher": true
+  "esbuild": true
+
+linkWorkspacePackages: true
