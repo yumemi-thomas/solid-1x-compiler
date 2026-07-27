@@ -89,10 +89,30 @@ fn probe_sources() -> Vec<(String, String)> {
         };
         let name = &after[..name_end];
         let source_start = &after[name_end + 4..];
-        let Some(source_end) = source_start.find('`') else {
+        // The closing backtick is the first unescaped one: several probes
+        // embed template literals, and stopping at `\`` truncates the source
+        // into something neither compiler can parse — which would silently
+        // drop the probe from the reconciliation instead of failing.
+        let mut source_end = None;
+        let bytes = source_start.as_bytes();
+        let mut index = 0;
+        while index < bytes.len() {
+            match bytes[index] {
+                b'\\' => index += 2,
+                b'`' => {
+                    source_end = Some(index);
+                    break;
+                }
+                _ => index += 1,
+            }
+        }
+        let Some(source_end) = source_end else {
             break;
         };
-        cases.push((name.to_string(), source_start[..source_end].to_string()));
+        let source = source_start[..source_end]
+            .replace("\\`", "`")
+            .replace("\\${", "${");
+        cases.push((name.to_string(), source));
         rest = &source_start[source_end..];
     }
     cases
@@ -159,6 +179,12 @@ fn every_parity_probe_reconciles_census_against_lowering() {
         sources.len() > 400,
         "expected the full probe corpus, extracted {}",
         sources.len()
+    );
+    // Guards the escape handling above: a truncated source parses as garbage
+    // and would be skipped rather than reconciled.
+    assert!(
+        sources.iter().any(|(_, source)| source.contains('`')),
+        "template-literal probes were truncated during extraction"
     );
 
     let mut failures = Vec::new();

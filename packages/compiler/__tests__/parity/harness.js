@@ -505,7 +505,11 @@ function firstErrorLine(error) {
 // both producing output that the normalizer rejects) counts as parity, which
 // preserves the adversarial-probe contract. A one-sided failure is recorded
 // as a reviewable expectation instead of aborting the whole corpus.
-function compareSource(source, fixture, options) {
+//
+// An empty diff has two very different meanings — the compilers agreed, or
+// neither produced anything to compare — so the outcome is reported alongside
+// it. Census reporting must not count the second as a passing comparison.
+function compareSourceDetailed(source, fixture, options) {
   let babelRaw;
   let babelError;
   let oxcRaw;
@@ -521,10 +525,10 @@ function compareSource(source, fixture, options) {
     oxcError = error;
   }
   if (babelError || oxcError) {
-    if (babelError && oxcError) return "";
+    if (babelError && oxcError) return { diff: "", outcome: "both-rejected" };
     return babelError
-      ? `!! babel error: ${firstErrorLine(babelError)}\n`
-      : `!! oxc error: ${firstErrorLine(oxcError)}\n`;
+      ? { diff: `!! babel error: ${firstErrorLine(babelError)}\n`, outcome: "babel-rejected" }
+      : { diff: `!! oxc error: ${firstErrorLine(oxcError)}\n`, outcome: "oxc-rejected" };
   }
 
   let babel;
@@ -542,12 +546,25 @@ function compareSource(source, fixture, options) {
     oxcNormalizeError = error;
   }
   if (babelNormalizeError || oxcNormalizeError) {
-    if (babelNormalizeError && oxcNormalizeError) return "";
+    if (babelNormalizeError && oxcNormalizeError) {
+      return { diff: "", outcome: "both-unnormalizable" };
+    }
     return babelNormalizeError
-      ? `!! babel output does not normalize: ${firstErrorLine(babelNormalizeError)}\n`
-      : `!! oxc output does not normalize: ${firstErrorLine(oxcNormalizeError)}\n`;
+      ? {
+          diff: `!! babel output does not normalize: ${firstErrorLine(babelNormalizeError)}\n`,
+          outcome: "babel-unnormalizable"
+        }
+      : {
+          diff: `!! oxc output does not normalize: ${firstErrorLine(oxcNormalizeError)}\n`,
+          outcome: "oxc-unnormalizable"
+        };
   }
-  return unifiedDiff(babel, oxc);
+  const diff = unifiedDiff(babel, oxc);
+  return { diff, outcome: diff === "" ? "parity" : "differs" };
+}
+
+function compareSource(source, fixture, options) {
+  return compareSourceDetailed(source, fixture, options).diff;
 }
 
 // --- Diffing ----------------------------------------------------------------
@@ -686,5 +703,6 @@ module.exports = {
   normalize,
   compareFixture,
   compareSource,
+  compareSourceDetailed,
   unifiedDiff
 };

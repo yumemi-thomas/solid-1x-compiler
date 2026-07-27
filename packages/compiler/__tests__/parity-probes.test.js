@@ -12,7 +12,7 @@
 const fs = require("fs");
 const path = require("path");
 const { createHash } = require("crypto");
-const { modes, compareSource, unifiedDiff } = require("./parity/harness");
+const { modes, compareSource, compareSourceDetailed, unifiedDiff } = require("./parity/harness");
 
 const cases = {
   "two-level attribute nesting": `
@@ -1963,7 +1963,11 @@ describe("Solid 1.x Babel vs Oxc parity probes", () => {
   for (const mode of Object.keys(modes)) {
     describe(mode, () => {
       test.each(caseEntries.map(entry => [entry.name, entry]))("%s", (_name, entry) => {
-        const diff = compareSource(entry.source, entry.id, modes[mode].options);
+        const { diff, outcome } = compareSourceDetailed(
+          entry.source,
+          entry.id,
+          modes[mode].options
+        );
         const rejectedByReference = diff.startsWith("!! babel error:");
         const rejectionKey = `${mode}/${entry.name}`;
         if (rejectedByReference) {
@@ -1976,7 +1980,7 @@ describe("Solid 1.x Babel vs Oxc parity probes", () => {
               mode,
               name: entry.name,
               id: entry.id,
-              referenceRejected: true,
+              outcome,
               diff: ""
             });
           }
@@ -1986,7 +1990,7 @@ describe("Solid 1.x Babel vs Oxc parity probes", () => {
           throw new Error(`${rejectionKey} was expected to be rejected by the Babel reference`);
         }
         if (report) {
-          reportRows.push({ mode, name: entry.name, id: entry.id, diff });
+          reportRows.push({ mode, name: entry.name, id: entry.id, outcome, diff });
           return;
         }
         if (update) {
@@ -2036,29 +2040,40 @@ describe("Solid 1.x Babel vs Oxc parity probes", () => {
     expect(stale).toEqual([]);
   });
 
+  // An entry only counts as a comparison when both compilers produced
+  // normalized output to compare. Entries where neither did are reported under
+  // their own heading rather than inflating the matching count.
+  function tally(rows) {
+    const comparisons = rows.filter(
+      row => row.outcome === "parity" || row.outcome === "differs"
+    );
+    return {
+      entries: rows.length,
+      comparisons: comparisons.length,
+      matching: comparisons.filter(row => row.outcome === "parity").length,
+      differing: comparisons.filter(row => row.outcome === "differs").length,
+      bothRejected: rows.filter(row => row.outcome === "both-rejected").length,
+      bothUnnormalizable: rows.filter(row => row.outcome === "both-unnormalizable").length,
+      referenceRejected: rows.filter(
+        row => row.outcome === "babel-rejected" || row.outcome === "babel-unnormalizable"
+      ).length,
+      oxcRejected: rows.filter(
+        row => row.outcome === "oxc-rejected" || row.outcome === "oxc-unnormalizable"
+      ).length
+    };
+  }
+
   afterAll(() => {
     if (!report) return;
-    const comparable = reportRows.filter(row => !row.referenceRejected);
-    const rejected = reportRows.filter(row => row.referenceRejected);
-    const differing = comparable.filter(row => row.diff !== "");
+    const differing = reportRows.filter(row => row.outcome === "differs");
     const summary = {
-      cases: reportRows.length,
-      comparisons: comparable.length,
-      referenceRejected: rejected.length,
-      matching: comparable.length - differing.length,
-      differing: differing.length,
+      cases: caseEntries.length,
+      ...tally(reportRows),
       byMode: Object.fromEntries(
-        Object.keys(modes).map(mode => {
-          const rows = reportRows.filter(row => row.mode === mode);
-          const comparableRows = rows.filter(row => !row.referenceRejected);
-          return [mode, {
-            cases: rows.length,
-            comparisons: comparableRows.length,
-            referenceRejected: rows.length - comparableRows.length,
-            matching: comparableRows.filter(row => row.diff === "").length,
-            differing: comparableRows.filter(row => row.diff !== "").length
-          }];
-        })
+        Object.keys(modes).map(mode => [
+          mode,
+          tally(reportRows.filter(row => row.mode === mode))
+        ])
       )
     };
     console.log(`PARITY_REPORT ${JSON.stringify(summary)}`);
