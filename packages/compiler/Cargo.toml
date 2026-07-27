@@ -8,7 +8,11 @@ repository = "https://github.com/yumemi-thomas/solid-1x-compiler"
 rust-version = "1.97"
 
 [features]
-native-facts = ["napi/noop"]
+default = ["node"]
+node = ["dep:napi", "dep:napi-derive"]
+# Deprecated alias kept so existing `default-features = false` pins keep
+# resolving. The core no longer links Node-API symbols, so it selects nothing.
+native-facts = []
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -17,8 +21,8 @@ crate-type = ["cdylib", "rlib"]
 html5ever = "0.39.0"
 htmlize = { version = "1", features = ["unescape"] }
 markup5ever_rcdom = "0.39.0"
-napi = { version = "3.8", default-features = false, features = ["napi4"] }
-napi-derive = "3.5"
+napi = { version = "3.8", default-features = false, features = ["napi4"], optional = true }
+napi-derive = { version = "3.5", optional = true }
 oxc_allocator = "0.118"
 oxc_ast = "0.118"
 oxc_ast_visit = "0.118"
@@ -28,10 +32,11 @@ oxc_semantic = "0.118"
 oxc_span = "0.118"
 oxc_syntax = "0.118"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
 
 [dev-dependencies]
+# The compiler emits no wire format of its own; `serde_json` is only used to
+# prove the trace types round-trip for whatever envelope a consumer defines.
+serde_json = "1"
 # `noop` stubs the Node-API symbols so `cargo test` can link the unit-test
 # harness (the classification-trace tests) without a Node host. Dev-only:
 # the shipped cdylib is unaffected.

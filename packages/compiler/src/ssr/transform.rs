@@ -1,4 +1,4 @@
-use napi::bindgen_prelude::*;
+use crate::error::{Error, Result};
 use oxc_allocator::{Allocator, CloneIn, Vec as ArenaVec};
 use oxc_ast::{
     ast::{
@@ -771,6 +771,10 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
         let mut force_merge_props = false;
         let component_class =
             self.component_class_normalization(&element.opening_element.attributes, element.span);
+        // Babel's `hasChildren`: JSX children win over an explicit `children`
+        // attribute, and the count is of raw children — whitespace and comment
+        // children still shadow the attribute even when they lower to nothing.
+        let has_children = !element.children.is_empty();
         // Ref-protocol `var _ref$ = call();` statements — Babel pushes these
         // to `exprs` and wraps the component call in an IIFE at the end.
 
@@ -812,6 +816,9 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
                     format!("{}:{}", name.namespace.name, name.name.name)
                 }
             };
+            if has_children && name == "children" {
+                continue;
+            }
             // The component ref protocol only applies to expression-container
             // values (Babel's `isJSXExpressionContainer` gate).
             if name == "ref" {
@@ -1568,7 +1575,11 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
     }
 
     pub(crate) fn lower_fragment(&mut self, fragment: &JSXFragment<'a>) -> Result<Expression<'a>> {
-        crate::shared::fragment::lower_fragment(self, fragment)
+        crate::shared::fragment::lower_fragment(
+            self,
+            fragment,
+            crate::semantic_trace::ExecutionSiteKind::JsxChild,
+        )
     }
 
     fn ssr_template(

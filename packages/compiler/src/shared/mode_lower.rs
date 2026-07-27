@@ -7,7 +7,7 @@
 //! pattern — so `lower_fragment` (and the component-children pipeline) can be
 //! generic while emission stays per-mode.
 
-use napi::bindgen_prelude::Result;
+use crate::error::Result;
 use oxc_ast::ast::{Expression, JSXElement, JSXFragment};
 use oxc_ast::AstBuilder;
 use oxc_span::Span;
@@ -18,6 +18,26 @@ use crate::shared::condition::{
 };
 
 pub(crate) trait ModeLower<'a>: ConditionBuilder<'a> {
+    /// Records what this lowering decided about a source value. Only the dom
+    /// generate reports; the other generates keep the no-op so shared code can
+    /// call unconditionally.
+    fn trace_value(
+        &mut self,
+        _span: Span,
+        _kind: crate::semantic_trace::ExecutionSiteKind,
+        _decision: crate::semantic_trace::ValueDecision,
+    ) {
+    }
+
+    /// Records what this lowering decided about a source callback.
+    fn trace_callback(
+        &mut self,
+        _span: Span,
+        _kind: crate::semantic_trace::ExecutionSiteKind,
+        _decision: crate::semantic_trace::CallbackDecision,
+    ) {
+    }
+
     /// Whether `wrapConditionals` is enabled for this generate.
     fn wrap_conditionals_enabled(&self) -> bool;
 

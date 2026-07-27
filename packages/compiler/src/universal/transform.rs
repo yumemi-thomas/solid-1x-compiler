@@ -1,4 +1,4 @@
-use napi::bindgen_prelude::*;
+use crate::error::{Error, Result};
 use oxc_allocator::{Allocator, CloneIn, Vec as ArenaVec};
 use oxc_ast::{
     ast::{
@@ -1412,7 +1412,11 @@ impl<'a, 'source> AstUniversalTransform<'a, 'source> {
     }
 
     pub(crate) fn lower_fragment(&mut self, fragment: &JSXFragment<'a>) -> Result<Expression<'a>> {
-        crate::shared::fragment::lower_fragment(self, fragment)
+        crate::shared::fragment::lower_fragment(
+            self,
+            fragment,
+            crate::semantic_trace::ExecutionSiteKind::JsxChild,
+        )
     }
 
     fn create_text_node(&mut self, span: Span, value: &str) -> Expression<'a> {

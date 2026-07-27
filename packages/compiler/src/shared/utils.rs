@@ -1,4 +1,4 @@
-use napi::bindgen_prelude::*;
+use crate::error::{Error, Result};
 use oxc_ast::ast::BinaryOperator;
 use oxc_ast::ast::{Expression, JSXAttributeItem, JSXElementName, JSXExpression};
 use oxc_span::Span;
@@ -54,6 +54,22 @@ pub(crate) fn is_component_name(name: &JSXElementName<'_>) -> bool {
                 .chars()
                 .next()
                 .is_some_and(|first| first.is_ascii_uppercase() || first == '_' || first == '$')
+    )
+}
+
+/// Source values that cannot contain reads, writes, calls, or callbacks and
+/// therefore have no observable runtime execution to report.
+pub(crate) fn is_literal_only_expression(expression: &Expression<'_>) -> bool {
+    matches!(
+        expression,
+        Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_)
+    ) || matches!(
+        expression,
+        Expression::Identifier(identifier)
+            if matches!(identifier.name.as_str(), "undefined" | "NaN" | "Infinity")
     )
 }
 

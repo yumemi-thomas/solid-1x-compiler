@@ -30,7 +30,7 @@
     "bench": "pnpm run build && node scripts/bench.mjs",
     "lint": "cargo clippy --manifest-path ./Cargo.toml -- -D warnings",
     "test": "pnpm run test:rust && pnpm run build:debug && jest --no-cache",
-    "test:rust": "cargo test --manifest-path ./Cargo.toml",
+    "test:rust": "cargo test --manifest-path ./Cargo.toml && cargo test --manifest-path ./Cargo.toml --no-default-features",
     "parity:1x": "jest __tests__/parity.test.js __tests__/parity-probes.test.js --runInBand",
     "parity:1x:update": "UPDATE_PARITY=1 jest __tests__/parity.test.js __tests__/parity-probes.test.js --runInBand",
     "parity:1x:probes": "jest __tests__/parity-probes.test.js --runInBand",

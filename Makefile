@@ -10,15 +10,19 @@ build:
 test:
 	pnpm run test
 
+# Both configurations: the Node addon build, then the Node-free core the Rust
+# consumers link (which is where the integration tests run).
 test-rust:
-	cargo +$(RUST_TOOLCHAIN) test --manifest-path $(COMPILER_MANIFEST) --features native-facts
+	cargo +$(RUST_TOOLCHAIN) test --manifest-path $(COMPILER_MANIFEST)
+	cargo +$(RUST_TOOLCHAIN) test --manifest-path $(COMPILER_MANIFEST) --no-default-features
 
 parity:
 	pnpm run parity
 
 verify:
 	cargo +$(RUST_TOOLCHAIN) fmt --manifest-path $(COMPILER_MANIFEST) -- --check
-	cargo +$(RUST_TOOLCHAIN) clippy --manifest-path $(COMPILER_MANIFEST) --features native-facts --all-targets
+	cargo +$(RUST_TOOLCHAIN) clippy --manifest-path $(COMPILER_MANIFEST) --all-targets
+	cargo +$(RUST_TOOLCHAIN) clippy --manifest-path $(COMPILER_MANIFEST) --no-default-features --all-targets
 	$(MAKE) test
 	$(MAKE) parity
 

@@ -1,7 +1,7 @@
-use napi::bindgen_prelude::*;
+use crate::error::{Error, Result};
 use oxc_allocator::CloneIn;
 use oxc_ast::ast::{JSXAttributeItem, JSXAttributeValue, ObjectPropertyKind, Statement};
-use oxc_span::Span;
+use oxc_span::{GetSpan, Span};
 
 use crate::dom::element::AstDomTransform;
 use crate::shared::ast::arrow_return_expression;
@@ -31,6 +31,7 @@ impl<'a> AstDomTransform<'a, '_> {
         element_id: &str,
         tag_name: &str,
         skip_children: bool,
+        children_from_attribute: bool,
     ) -> Result<Statement<'a>> {
         self.template_state.uses_spread = true;
         // A spread may carry delegated event handlers, which can't be known at
@@ -55,6 +56,15 @@ impl<'a> AstDomTransform<'a, '_> {
                     let is_static =
                         source_from_span(spread.span, self.source).contains(&self.static_marker);
                     let dynamic = self.classify().is_dynamic(None, &spread.argument, false);
+                    self.semantic_trace.value(
+                        spread.argument.span(),
+                        crate::semantic_trace::ExecutionSiteKind::NativeSpread,
+                        if dynamic {
+                            crate::semantic_trace::ValueDecision::CallerContext
+                        } else {
+                            crate::semantic_trace::ValueDecision::EagerOnce
+                        },
+                    );
                     let value = spread.argument.clone_in(self.allocator);
                     let value = if dynamic {
                         dynamic_spread = true;
@@ -96,7 +106,11 @@ impl<'a> AstDomTransform<'a, '_> {
                     if !first_spread && !dynamic {
                         continue;
                     }
-                    running_props.push(self.spread_attribute_property(attr)?);
+                    running_props.push(self.spread_attribute_property(
+                        attr,
+                        skip_children,
+                        children_from_attribute,
+                    )?);
                 }
             }
         }
@@ -136,6 +150,8 @@ impl<'a> AstDomTransform<'a, '_> {
     fn spread_attribute_property(
         &mut self,
         attr: &oxc_ast::ast::JSXAttribute<'a>,
+        skip_children: bool,
+        children_from_attribute: bool,
     ) -> Result<ObjectPropertyKind<'a>> {
         let name = match &attr.name {
             oxc_ast::ast::JSXAttributeName::Identifier(name) => name.name.to_string(),
@@ -160,6 +176,13 @@ impl<'a> AstDomTransform<'a, '_> {
                 Some(JSXAttributeValue::ExpressionContainer(container))
                     if container.expression.as_expression().is_some() =>
                 {
+                    // The IIFE wrap makes every value a getter, so the spread
+                    // consumer decides when it is read.
+                    self.semantic_trace.value(
+                        container.expression.span(),
+                        crate::semantic_trace::ExecutionSiteKind::NativeAttribute,
+                        crate::semantic_trace::ValueDecision::CallerContext,
+                    );
                     let value = self.attribute_value_expression(container);
                     let wrapped = self.attr_planner().style_no_inline_iife(attr.span, value);
                     return Ok(self.object_getter_property(attr.span, &name, wrapped));
@@ -193,6 +216,49 @@ impl<'a> AstDomTransform<'a, '_> {
                     self.classify()
                         .is_dynamic(Some(container.span.start), expression, false)
                 });
+                // `ref`/`use:` never reach the spread object (`can_native_spread`).
+                let semantic_kind = if name.starts_with("on") {
+                    self.semantic_trace.callback(
+                        container.expression.span(),
+                        crate::semantic_trace::ExecutionSiteKind::EventHandler,
+                        crate::semantic_trace::CallbackDecision::LaterEvent,
+                    );
+                    None
+                } else if name == "children" {
+                    // A promoted `children` attribute is reported by child
+                    // insertion instead.
+                    if children_from_attribute {
+                        None
+                    } else {
+                        self.semantic_trace.value(
+                            container.expression.span(),
+                            crate::semantic_trace::ExecutionSiteKind::JsxChild,
+                            if dynamic {
+                                if skip_children {
+                                    crate::semantic_trace::ValueDecision::Elided
+                                } else {
+                                    crate::semantic_trace::ValueDecision::ReactiveRerun
+                                }
+                            } else {
+                                crate::semantic_trace::ValueDecision::EagerOnce
+                            },
+                        );
+                        None
+                    }
+                } else {
+                    Some(crate::semantic_trace::ExecutionSiteKind::NativeAttribute)
+                };
+                if let Some(kind) = semantic_kind {
+                    self.semantic_trace.value(
+                        container.expression.span(),
+                        kind,
+                        if dynamic {
+                            crate::semantic_trace::ValueDecision::CallerContext
+                        } else {
+                            crate::semantic_trace::ValueDecision::EagerOnce
+                        },
+                    );
+                }
                 let mut value = self.attribute_value_expression(container);
                 self.attr_planner().fold_confident(&mut value);
                 if dynamic {

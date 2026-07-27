@@ -47,9 +47,9 @@ regenerate the baseline whenever a fixture reaches parity.
 The current corpus contains:
 
 - **73/73** whole-file fixture cases at exact normalized parity.
-- **2,590/2,590** valid focused probe comparisons at parity across all nine
-  output modes. Eleven additional entries are explicit Babel 1.x compiler
-  failures.
+- **3,967/3,967** valid focused probe comparisons at parity across all nine
+  output modes (442 probe cases). Eleven additional entries are explicit
+  Babel 1.x compiler failures.
 - **332/332** valid cross-mode fixture-union comparisons at parity. Six inputs
   are rejected by both compilers, and eight universal-mode entries are
   explicit cases where Babel 1.x prints syntactically invalid JavaScript.

@@ -66,7 +66,7 @@ impl<'c> Classify<'c> {
             leading_from.is_some_and(|from| self.marker_between(from, expression.span().start));
         let dynamic =
             !marker_static && is_dynamic_with_namespaces(expression, check_tags, self.bindings);
-        #[cfg(test)]
+        #[cfg(all(test, feature = "node"))]
         trace::record(expression.span(), check_tags, dynamic);
         dynamic
     }
@@ -270,7 +270,7 @@ fn is_dynamic_deep(value: &Expression<'_>, check_tags: bool) -> bool {
 /// expression's source span. The classification-trace harness below runs the
 /// same source through every generate and asserts the *decisions* agree —
 /// mode output can differ, classification cannot.
-#[cfg(test)]
+#[cfg(all(test, feature = "node"))]
 pub(crate) mod trace {
     use std::cell::RefCell;
 
@@ -301,7 +301,7 @@ pub(crate) mod trace {
 /// classification question, they must answer it identically. Solid 1.x SSR
 /// intentionally bypasses classification for a few fragment/spread paths;
 /// emission differs per mode, but overlapping `Classify` decisions may not.
-#[cfg(test)]
+#[cfg(all(test, feature = "node"))]
 mod tests {
     use std::collections::BTreeMap;
 

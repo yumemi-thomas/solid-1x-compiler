@@ -1,5 +1,96 @@
 # @dom-expressions/compiler
 
+## Unreleased
+
+### Minor Changes
+
+- Execution facts are now typed data returned by `compile`, matching the 2.0
+  compiler's shape. `CompileOptions::semantic_trace` opts in and
+  `CompileOutput::semantic_trace` carries a `SemanticTrace` collected by the
+  same pass that produced `code`, so a consumer that wants both no longer
+  parses and lowers the source twice. `SemanticTrace`, `ExecutionSite`,
+  `ExecutionSiteKind`, `ValueDecision`, `CallbackDecision`, `TerminalDecision`
+  and `SourceSpan` are exported from the crate root and derive
+  `Serialize`/`Deserialize`.
+
+  `analyze_execution_contract` and `src/facts.rs` are removed with the JSON
+  contract they produced (`wireVersion`, `scope`, `coverage`, `provenance`,
+  `facets`). The compiler no longer owns a wire format: spans, kinds and
+  decisions are the payload, and a consumer that moves them across a process
+  boundary defines its own envelope, protocol version and source hash — which
+  is what a sidecar has to do anyway. `sha2` and `serde_json` leave the
+  dependency list (`serde_json` stays as a dev-dependency for a round-trip
+  test).
+
+  The recorder and its reconciliation are unchanged: the census still
+  enumerates sites independently, lowering still records each decision where it
+  makes it, and `finish()` still fails the compile on an unresolved,
+  conflicting, or uncensused site.
+
+- The compiler core no longer depends on Node-API. A new `src/compiler.rs`
+  holds the reusable interface — `compile`, `analyze_execution_contract`, and
+  typed `CompileOptions`/`Generate`/`Wrapper`/`Renderer`/`CompileOutput` — and
+  a new `src/error.rs` holds `CompileError`, which carries a `kind()` of
+  `Parse`, `Configuration`, or `Transform` instead of a napi `Error`. The
+  `#[napi]` surface moved to `src/node_adapter.rs` behind a new default `node`
+  feature, together with the nullable transport structs (`config`) and the
+  directive, lazy and refresh passes.
+
+  Building with `--no-default-features` now produces a crate with **no napi in
+  the dependency graph at all**, rather than one that pulls napi in and stubs
+  its symbols. The `native-facts` feature is kept as an inert alias so existing
+  pins keep resolving.
+
+  Rust consumers change from `analyze_execution_contract(source,
+  &TransformOptions { module_name: Some(..), generate: Some("dom".into()), .. })`
+  to `analyze_execution_contract(source, &CompileOptions { module_name: ..,
+  ..Default::default() })`, and get a typed `CompileError` back. The Node
+  interface is unchanged: `transform()` keeps its option shape, its acceptance
+  of an explicitly empty `moduleName`, and its parse-before-validation
+  ordering, all pinned by tests in the adapter.
+
+- `analyze_execution_contract` now reports what lowering actually did, instead
+  of re-deriving it. A new `semantic_trace` module splits the contract into two
+  independent producers: `ExecutionCensus` enumerates the relevant
+  original-source sites, and `TraceRecorder` collects a decision from the DOM
+  lowering pass at the point each decision is made. `finish()` reconciles them
+  and fails closed on an unresolved censused site, on conflicting decisions for
+  one site, or on a decision aimed at a site the census never enumerated;
+  `analyze_execution_contract` runs the real lowering pass and discards the
+  generated program, keeping only the reconciled decisions.
+
+  Previously the census computed the decisions itself by re-running `Classify`,
+  so the contract and the emitted code were two implementations of the same
+  rules that could drift apart silently — as they already had for the
+  `children`-shadowing gate below. They now cannot: a lowering path that stops
+  reporting, or reports something unrecognized, is a build error. Two corpus
+  tests run all 74 Babel fixtures and all 442 parity probes through the
+  reconciliation.
+
+  The wire format is unchanged (`wireVersion` 2, same facets, same site kinds
+  and decision names), but the reported site set is more precise, since it now
+  follows the lowering: literal-only leaves are no longer sites (they have no
+  runtime execution to report), `style`/`classList` objects decompose per
+  property the way the planner splits them, values folded into the template
+  string or dropped outright are reported `elided`, and `use:` directive values
+  are `caller-context` (the directive owns the accessor) rather than
+  `reactive-rerun`.
+
+  `transform()` is unaffected: it leaves the recorder disabled, every recorder
+  call is a no-op in that state, and a test asserts the generated code is
+  byte-identical whether or not a contract was produced.
+
+### Patch Changes
+
+- Match Babel's `hasChildren` gate on components: a `children` attribute is
+  discarded whenever the element has JSX children. Previously the DOM, SSR and
+  universal component paths emitted both, producing a duplicate `children` key
+  in the props object (and, in SSR, a template for the discarded JSX). The
+  count is of raw children, so whitespace and comment children shadow the
+  attribute too — matching the reference. `analyze_execution_contract` reports
+  the discarded expression as `elided` rather than claiming it runs; the rule
+  already held for native elements on both sides.
+
 ## 0.50.0-next.29
 
 ### Patch Changes

@@ -16,9 +16,18 @@ consumed as a library, independently of any one consumer.
   (from `main`).
 - **Constants** — `packages/dom-expressions/src/constants.js`, imported from the
   same revision as the Babel package.
+- **Host-independent compiler core** — `src/compiler.rs`, `src/error.rs` and
+  `src/node_adapter.rs` are ported from
+  `ryansolid/dom-expressions@feat/host-independent-compiler-core`, adapted to
+  Solid 1.x: `dev` stays inert, and the adapter keeps this fork's established
+  parse/skip/module/generate validation ordering.
 - **Parity/trace design** —
   `ryansolid/dom-expressions@44f8d2668fff93c9d5ed5fdbef1cdadc1817a5a1`
   (the former `eat/total-semantic-trace` work, merged into `next`).
+  `packages/compiler/src/semantic_trace.rs` is a port of that module's census
+  and recorder, adapted to Solid 1.x lowering: the census models 1.x's
+  `classList` splitting, `class`/`className` combining, `use:`/`on:` namespaces
+  and `children` promotion, none of which exist upstream.
 
 The upstream MIT license is retained: `LICENSE` at the root carries the upstream
 copyright, and `packages/babel-plugin-jsx-dom-expressions/LICENSE` is the

@@ -10,12 +10,15 @@ Two consumers want different halves of that:
 
 - **Bundlers and build tools** want `transform()`: JSX in, DOM Expressions
   output out.
-- **Static analyzers** want `analyze_execution_contract()`: the compiler's own
-  answer to "how will this JSX site execute?", which no tool can derive from
-  source text alone.
+- **Static analyzers** want `CompileOptions::semantic_trace`: the compiler's
+  own answer to "how will this JSX site execute?", which no tool can derive
+  from source text alone.
 
-Both come out of one implementation, so the semantics an analyzer reasons about
-are the semantics the code was compiled with.
+Both come out of one pass — literally the same `compile()` call. The trace is
+recorded *by* the lowering as it runs, then reconciled against an independent
+census of the source before it is returned, so the semantics an analyzer
+reasons about are the semantics the code was compiled with, not a second
+implementation's opinion about them.
 
 ## Packages
 
@@ -52,27 +55,48 @@ diff against upstream stays readable.
 
 ## Using it from Rust
 
-The same crate links in-process, with the napi glue stubbed out:
+The same crate links in-process. With default features off it has no Node-API
+dependency at all — the addon is one adapter over the core, not a layer the
+core sits on:
 
 ```toml
 [dependencies]
-dom-expressions-compiler = { git = "https://github.com/yumemi-thomas/solid-1x-compiler", tag = "v0.1.0", default-features = false, features = ["native-facts"] }
+dom-expressions-compiler = { git = "https://github.com/yumemi-thomas/solid-1x-compiler", tag = "v0.1.0", default-features = false }
 ```
 
 ```rust
-use dom_expressions_compiler::{TransformOptions, analyze_execution_contract};
+use dom_expressions_compiler::{compile, CompileOptions};
 
-let contract = analyze_execution_contract(source, &options)?;
+let output = compile(source, &CompileOptions {
+    module_name: "solid-js/web".into(),
+    semantic_trace: true,
+    ..CompileOptions::default()
+})?;
+
+for site in output.semantic_trace.expect("tracing was requested").sites {
+    println!("{:?} {:?} {:?}", site.span, site.kind, site.decision);
+}
 ```
 
-`analyze_execution_contract` is reporting-only: enabling it does not change
-generated JavaScript, and tests prove that. See
+`CompileOptions` states the module name and output mode directly instead of as
+nullable transport fields, and `compile` returns owned `String`s and a
+`CompileError` carrying a `kind()` of `Parse`, `Configuration`, or `Transform`.
+No Oxc allocator, AST node, or Node-API value crosses the interface.
+
+`semantic_trace` is reporting-only: a test proves the emitted code is
+byte-identical with tracing on and off. Compilation fails closed when the
+recorded decisions and the independent source census disagree, rather than
+returning a partial trace. The trace types derive `Serialize`/`Deserialize`, so
+a sidecar can define whatever envelope its consumer expects — the compiler owns
+no wire format of its own. See
 [docs/execution-contract.md](docs/execution-contract.md) for what the contract
 covers and what it refuses to answer.
 
-The `native-facts` feature selects `napi/noop`, which stubs the Node-API
-symbols so the crate links without a Node host. Consumers that want the addon
-instead should depend on the npm package, not the crate.
+The default `node` feature adds the napi dependency and the `#[napi]` exports
+in `src/node_adapter.rs`; turning it off drops both. The old `native-facts`
+feature remains as an inert alias so existing pins keep resolving — it selects
+nothing now, because the core no longer links Node-API symbols to stub.
+Consumers that want the addon should depend on the npm package, not the crate.
 
 ## Development
 
@@ -93,11 +117,15 @@ pnpm install
 
 Changes to JSX classification must keep the execution-contract census total and
 pass `make parity`. A classification change that no fixture covers is a gap in
-the corpus, not a free change.
+the corpus, not a free change. A change to what a lowering path emits must
+change what it reports in the same edit — the reconciliation tests run every
+fixture and every parity probe through the contract, so a path that stops
+reporting fails the build rather than going stale.
 
 ## Versioning for consumers
 
 Rust consumers pin a git tag. The tag is the contract: the crate's public API,
-the execution-contract wire shape, and the `solidSemantics: "1"` claim only
-change on a new tag, and a consumer that validates the contract will reject a
-mismatched producer loudly rather than analyze stale semantics.
+the trace's site kinds and decision vocabulary, and the Solid 1.x semantics
+they describe only change on a new tag. A consumer that transports traces
+should carry its own protocol version and source hash and reject a mismatch
+loudly, rather than analyze stale semantics.

@@ -1,56 +1,90 @@
 # The execution contract
 
-`analyze_execution_contract` reports how the compiler will execute the
-original-source JSX it was handed. It is the producer side of the contract; a
-consumer validates it before trusting it, and the two halves are deliberately
-independent.
+Setting `CompileOptions::semantic_trace` makes `compile` report how the
+compiler will execute the original-source JSX it was handed, alongside the code
+it generated for it. The report is typed Rust data, not a wire format: a
+consumer that needs to move it across a process boundary defines its own
+envelope and version, because that is a transport concern rather than a
+compiler one.
 
 ## Totality, not sampling
 
-Before lowering, the compiler independently enumerates every relevant
-original-source JSX site — the census. Lowering then assigns exactly one
-terminal value or callback decision to each censused site, and finish-time
-validation rejects a contract with a missing or conflicting decision.
+Two independent producers have to agree before a contract exists.
+
+Before lowering, `ExecutionCensus` walks the source and enumerates every
+relevant original-source JSX site. That is the denominator: "this expression is
+here, and the compiler owes an answer about it."
+
+Then the real DOM lowering pass runs with a `TraceRecorder` attached, and calls
+`trace_value` / `trace_callback` at the exact point it decides what to do with
+each site. That is the numerator, and it is an *observation* — the decision is
+recorded by the code that emitted (or discarded) the value, not re-derived
+afterwards from the rule that produced it.
+
+`TraceRecorder::finish` reconciles the two and fails closed on any of:
+
+- an **unresolved** censused site — lowering never said what it did with it;
+- **conflicting** decisions for one site — two paths disagree;
+- a decision aimed at an **uncensused** site — lowering reported something the
+  census does not recognize.
+
+`compile` returns the reconciled decisions in `CompileOutput::semantic_trace`,
+from the same pass that produced `CompileOutput::code`.
 
 That completeness invariant is the whole point. A consumer that receives a
 partial contract cannot tell "this expression runs untracked" from "the
 compiler forgot to mention it", so a partial contract must be rejected rather
 than read optimistically. Absence is never untracked rendering.
 
-Reporting is side-effect free: enabling it does not change generated
-JavaScript, and tests assert the emitted code is byte-identical either way.
+The reconciliation is also what keeps the two halves from drifting. A lowering
+rule that changes without its reporting changing with it stops being a stale
+contract nobody notices and becomes a build error: the corpus reconciliation
+tests run every Babel fixture and every parity probe through `finish`, so a
+transform path that forgets to report fails there.
+
+Reporting is side-effect free: with `semantic_trace` off the recorder is
+disabled and every call is a no-op, and a test asserts the emitted code is
+byte-identical either way.
 
 ## Scope
 
-The contract carries the exact source, the normalized options, the output mode,
-and the producer identity it was computed under, plus `solidSemantics: "1"`.
-A consumer is expected to check all of them against the bytes it analyzed.
+Spans are byte offsets into the exact source that was compiled, valid only for
+those bytes and the options they were compiled under. A consumer that caches or
+transports a trace is responsible for carrying whatever it needs to re-establish
+that — a source hash, an options hash, a protocol version — and for rejecting a
+mismatch.
 
-Only DOM generation claims total facets. Other renderer modes, malformed
-options, unknown fact kinds, invalid UTF-8 boundaries, and stale source hashes
-fail closed rather than degrade.
+Only DOM generation produces a trace; every other generate returns a
+configuration error rather than a partial answer, as does a source skipped by
+`requireImportSource` (there is no lowering to report on).
 
-## What the DOM contract decides
+## What a site says
 
-- Dynamic native JSX children are tracked `jsx-child` regions.
-- Dynamic native JSX attributes are tracked `jsx-attribute` regions.
-- Expressions the compiler renders exactly once are explicit untracked regions:
-  template-inlined and unwrapped-insert children (including `staticMarker`
-  holes) as `jsx-child`, one-shot `setAttr` attribute values as
-  `jsx-attribute`, and by-value component properties and children as
-  `component-getter`.
-- `on*` JSX values are deferred `event-handler` callbacks, not tracked reads at
-  element creation.
-- Component invocations and dynamic component properties are identified;
-  property getters are deferred callbacks.
-- Function children of configured control-flow built-ins are render callbacks.
-- `hydratable`, `dev`, `effectWrapper`, `wrapConditionals`, `staticMarker`, and
-  sorted, unique `builtIns` are forwarded exactly to the compiler.
-- Fact arrays are sorted deterministically by original UTF-8 byte spans.
+Each `ExecutionSite` carries a span, a `kind` naming the JSX position, and
+exactly one terminal decision. Sites are ordered deterministically by span.
+
+Value positions — `jsx-child`, `native-attribute`, `native-spread`,
+`component-property`, `component-spread`, `component-child` — decide between:
+
+| decision | meaning |
+| --- | --- |
+| `reactive-rerun` | read inside an effect; re-runs when its sources change |
+| `eager-once` | read exactly once, at creation |
+| `caller-context` | handed to a caller (a getter, a spread merge, a directive accessor) that decides when to read it |
+| `elided` | never emitted — folded into the template string, or dropped |
+
+Callback positions decide between `later-event` (`event-handler`),
+`later-render` (`control-flow-render`, a built-in's function child), and
+`ref-apply` (`ref`).
+
+Expressions with no observable execution are not sites at all: literal-only
+leaves have nothing to report, and neither does anything nested inside a value
+the compiler discards wholesale.
 
 `packages/compiler/src/shared/classify.rs` is the single classification
-authority; lowering and the census both go through it, which is what keeps the
-two from disagreeing.
+authority. Only lowering consults it for decisions; the census uses it solely
+to enumerate sites, so the two cannot quietly re-derive the same rule
+differently.
 
 ## Changing a classification
 
@@ -58,3 +92,8 @@ A classification change is a contract change. It must keep the census total,
 update the affected fixtures, and pass `make parity` against the Babel 1.x
 oracle. If no fixture covers the changed behavior, the corpus has a gap — add
 the fixture rather than landing the change uncovered.
+
+If a change makes lowering drop a value, say so where it is dropped
+(`ValueDecision::Elided`); if it makes lowering emit a value the census does
+not enumerate, teach the census about it. Reconciliation will not let a change
+land with only one of the two updated.

@@ -1,8 +1,9 @@
-use napi::bindgen_prelude::*;
+use crate::error::Result;
 use oxc_allocator::{Allocator, CloneIn};
 use oxc_ast::ast::{
     AssignmentOperator, AssignmentTarget, Expression, JSXElement, JSXExpression, Statement,
 };
+use oxc_span::GetSpan;
 
 use crate::dom::attrs::CloseTagContext;
 use crate::dom::template::DomTemplateState;
@@ -79,6 +80,9 @@ pub(crate) struct AstDomTransform<'a, 'source> {
     /// Babel keeps a raw `this` in the tag callee of the root element of each
     /// `transformJSX` call; only descendants use the `_self$` capture.
     pub(crate) jsx_root_span: Option<oxc_span::Span>,
+    /// Disabled for ordinary `transform()` runs, so tracing cannot influence
+    /// generated output.
+    pub(crate) semantic_trace: crate::semantic_trace::TraceRecorder,
 }
 
 pub(crate) struct DomTransformConfig {
@@ -150,6 +154,7 @@ impl<'a, 'source> AstDomTransform<'a, 'source> {
             next_function_class_method: false,
             statement_depth: 0,
             skip_xmlns_attribute: false,
+            semantic_trace: crate::semantic_trace::TraceRecorder::disabled(),
             hydration_walk_anchor: None,
             last_child_walk: None,
             has_hydratable_event: false,
@@ -247,27 +252,24 @@ impl<'a, 'source> AstDomTransform<'a, 'source> {
         // rather than attribute handling (Babel parity): when the element has
         // no real children, the value becomes its child expression; when it
         // does, the attribute is dropped.
-        let element: &JSXElement<'a> = if element.children.is_empty()
-            && !element
-                .opening_element
-                .attributes
-                .iter()
-                .any(|attr| matches!(attr, oxc_ast::ast::JSXAttributeItem::SpreadAttribute(_)))
-        {
-            if let Some(container) = children_attribute_container(element) {
-                let mut clone = element.clone_in(self.allocator);
-                clone
-                    .children
-                    .push(oxc_ast::ast::JSXChild::ExpressionContainer(
-                        oxc_allocator::Box::new_in(
-                            container.clone_in(self.allocator),
-                            self.allocator,
-                        ),
-                    ));
-                self.allocator.alloc(clone)
-            } else {
-                element
-            }
+        let attribute_child =
+            (element.children.is_empty()
+                && !element.opening_element.attributes.iter().any(|attr| {
+                    matches!(attr, oxc_ast::ast::JSXAttributeItem::SpreadAttribute(_))
+                }))
+            .then(|| children_attribute_container(element))
+            .flatten();
+        // Which `children` value was promoted, so the attribute loop can tell
+        // it apart from sibling `children` attributes the promotion dropped.
+        let promoted_children_span = attribute_child.map(|container| container.expression.span());
+        let element: &JSXElement<'a> = if let Some(container) = attribute_child {
+            let mut clone = element.clone_in(self.allocator);
+            clone
+                .children
+                .push(oxc_ast::ast::JSXChild::ExpressionContainer(
+                    oxc_allocator::Box::new_in(container.clone_in(self.allocator), self.allocator),
+                ));
+            self.allocator.alloc(clone)
         } else {
             element
         };
@@ -295,6 +297,7 @@ impl<'a, 'source> AstDomTransform<'a, 'source> {
             false,
             &element_id,
             !element.children.is_empty(),
+            promoted_children_span,
             &mut template.html,
             &mut declarations,
             &mut operations,

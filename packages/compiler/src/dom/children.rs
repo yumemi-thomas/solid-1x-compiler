@@ -2,18 +2,19 @@ use crate::dom::attrs::CloseTagContext;
 use crate::dom::element::{jsx_expression_to_expression, AstDomTransform};
 use crate::dom::static_template::lower_static_native_template;
 use crate::dom::template::InsertMarker;
+use crate::error::{Error, Result};
 use crate::shared::classify::check_length;
 use crate::shared::utils::{
     element_name, escape_html_text, escape_html_text_expression, is_component_name,
     static_jsx_expression, trim_jsx_text,
 };
-use napi::bindgen_prelude::*;
 use oxc_allocator::CloneIn;
 use oxc_ast::ast::Expression;
 use oxc_ast::ast::{
     JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement, JSXExpression,
     Statement,
 };
+use oxc_span::GetSpan;
 
 impl<'a> AstDomTransform<'a, '_> {
     #[allow(clippy::too_many_arguments)]
@@ -285,6 +286,12 @@ impl<'a> AstDomTransform<'a, '_> {
                         continue;
                     }
                     if let Some(value) = self.static_jsx_expression_value(&container.expression) {
+                        // Frozen into the template string.
+                        self.semantic_trace.value(
+                            container.expression.span(),
+                            crate::semantic_trace::ExecutionSiteKind::JsxChild,
+                            crate::semantic_trace::ValueDecision::Elided,
+                        );
                         template.push_both(&escape_html_text_expression(&value));
                         if !in_text_run {
                             if filtered_index(child).is_some_and(|position| {
@@ -355,6 +362,15 @@ impl<'a> AstDomTransform<'a, '_> {
                         // shared predicate, and a non-dynamic hole inserts
                         // its expression untouched.
                         let dynamic = self.classify().is_dynamic_child_slot(dynamic_child);
+                        self.semantic_trace.value(
+                            container.expression.span(),
+                            crate::semantic_trace::ExecutionSiteKind::JsxChild,
+                            if dynamic {
+                                crate::semantic_trace::ValueDecision::ReactiveRerun
+                            } else {
+                                crate::semantic_trace::ValueDecision::EagerOnce
+                            },
+                        );
                         // JSX inside the hole stays raw for the deferred pass
                         // (Babel wraps the untransformed expression and its
                         // outer traversal lowers the JSX later).
@@ -396,6 +412,16 @@ impl<'a> AstDomTransform<'a, '_> {
                 JSXChild::Spread(spread) => {
                     in_text_run = false;
                     self.template_state.uses_insert = true;
+                    let dynamic = self.classify().is_dynamic(None, &spread.expression, false);
+                    self.semantic_trace.value(
+                        spread.expression.span(),
+                        crate::semantic_trace::ExecutionSiteKind::JsxChild,
+                        if dynamic {
+                            crate::semantic_trace::ValueDecision::ReactiveRerun
+                        } else {
+                            crate::semantic_trace::ValueDecision::EagerOnce
+                        },
+                    );
                     let value = spread_child_expression(self, spread.span, &spread.expression);
                     let marker = self.dynamic_slot_marker(
                         &element.children,
@@ -845,6 +871,7 @@ impl<'a> AstDomTransform<'a, '_> {
             true,
             &child_id,
             !child.children.is_empty(),
+            None,
             &mut child_template.html,
             &mut child_declarations,
             &mut child_operations,

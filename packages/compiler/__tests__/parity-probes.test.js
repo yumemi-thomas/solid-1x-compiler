@@ -1346,6 +1346,558 @@ const a = <div class:active style:color attr:title bool:hidden prop:value />;
 `,
   "1x static reserved namespace literals": `
 const a = <div class:active="yes" style:color="red" attr:title="t" bool:hidden="true" prop:value="v" />;
+`,
+  // --- effect/memo grouping on a single element ---------------------------
+  "1x single dynamic attribute no prev object": `
+const a = <div id={id()} />;
+`,
+  "1x two dynamic attributes share one effect": `
+const a = <div id={id()} title={title()} />;
+`,
+  "1x dynamic attribute and dynamic child share element": `
+const a = <div id={id()}>{child()}</div>;
+`,
+  "1x dynamic attributes across nested elements": `
+const a = <div id={id()}><span title={title()}><a lang={lang()} /></span></div>;
+`,
+  "1x dynamic style class attr prop on one element": `
+const a = <div style={style()} class={cls()} attr:x={x()} prop:y={y()} />;
+`,
+  "1x dynamic classList and class together": `
+const a = <div class={cls()} classList={{ [key()]: on() }} />;
+`,
+  "1x dynamic style object values": `
+const a = <div style={{ color: c(), "background-color": bg() }} />;
+`,
+  "1x dynamic spread beside dynamic attribute": `
+const a = <div {...rest()} id={id()} />;
+`,
+  "1x dynamic attribute between two spreads": `
+const a = <div {...a()} id={id()} {...b()} />;
+`,
+  "1x dynamic textContent only child": `
+const a = <div>{text()}</div>;
+const z = <p>P</p>;
+`,
+
+  // --- conditional wrapping ------------------------------------------------
+  "1x logical and child": `
+const a = <div>{cond() && <span>{x()}</span>}</div>;
+`,
+  "1x logical or child": `
+const a = <div>{cond() || <span>{x()}</span>}</div>;
+`,
+  "1x nullish child": `
+const a = <div>{value() ?? <span>{x()}</span>}</div>;
+`,
+  "1x negated logical and child": `
+const a = <div>{!cond() && <span>{x()}</span>}</div>;
+`,
+  "1x chained ternary child": `
+const a = <div>{a() ? <b>B</b> : c() ? <i>I</i> : <u>U</u>}</div>;
+`,
+  "1x ternary in attribute value": `
+const a = <div id={cond() ? one() : two()} />;
+`,
+  "1x logical chain in attribute value": `
+const a = <div id={a() && b() && c()} />;
+`,
+  "1x ternary in component prop": `
+const a = <Comp p={cond() ? one() : two()} />;
+`,
+  "1x conditional with static branches": `
+const a = <div>{cond() ? "yes" : "no"}</div>;
+`,
+  "1x conditional returning fragment branches": `
+const a = <div>{cond() ? <><b>B</b><i>I</i></> : <u>U</u>}</div>;
+`,
+
+  // --- ssr / hydration builtins -------------------------------------------
+  "1x NoHydration builtin": `
+const a = <NoHydration><div>{x()}</div></NoHydration>;
+`,
+  "1x Hydration builtin": `
+const a = <Hydration><div>{x()}</div></Hydration>;
+`,
+  "1x Portal with mount": `
+const a = <Portal mount={target()}><div>{x()}</div></Portal>;
+`,
+  "1x Dynamic with spread": `
+const a = <Dynamic component={comp()} {...rest()}>{x()}</Dynamic>;
+`,
+  "1x Assets builtin": `
+const a = <Assets><title>{t()}</title></Assets>;
+`,
+  "1x multiple dynamic in one text run": `
+const a = <div>a{one()}b{two()}c</div>;
+`,
+  "1x element split by component child": `
+const a = <div><span>S</span><Comp /><span>T</span></div>;
+`,
+  "1x boolean attribute static true and dynamic": `
+const a = <input disabled readonly={ro()} />;
+`,
+
+  // --- text and whitespace -------------------------------------------------
+  "1x explicit space expression between elements": `
+const a = (
+  <div>
+    <a>A</a>{" "}
+    <span>S</span>
+  </div>
+);
+`,
+  "1x indented text around expression": `
+const a = (
+  <div>
+    before
+    {value()}
+    after
+  </div>
+);
+`,
+  "1x text collapsing across many lines": `
+const a = (
+  <div>
+    one
+    two
+    three
+  </div>
+);
+`,
+  "1x nbsp entity between elements": `
+const a = <div><a>A</a>&nbsp;<span>S</span></div>;
+`,
+  "1x numeric and hex entities": `
+const a = <div>&#8212;&#x2014;&amp;&lt;&gt;</div>;
+`,
+  "1x text with only whitespace child": `
+const a = <div>   </div>;
+`,
+  "1x expression flanked by literal spaces": `
+const a = <div>a {value()} b</div>;
+`,
+  "1x trailing newline text after component": `
+const a = (
+  <div>
+    <Comp />
+    tail
+  </div>
+);
+`,
+
+  // --- svg / namespaces ----------------------------------------------------
+  "1x svg camelCase attributes": `
+const a = <svg viewBox="0 0 10 10" preserveAspectRatio="none"><rect strokeWidth={w()} /></svg>;
+`,
+  "1x svg use with xlink href": `
+const a = <svg><path xlink:href={href()} /></svg>;
+`,
+  "1x svg dynamic class and style": `
+const a = <svg class={cls()} style={{ fill: f() }}><path d={d()} /></svg>;
+`,
+  "1x foreignObject with html and dynamic": `
+const a = <svg><foreignObject><div>{x()}</div></foreignObject></svg>;
+`,
+  "1x svg text and tspan": `
+const a = <svg><text x={x()}>{label()}</text></svg>;
+`,
+
+  // --- css -----------------------------------------------------------------
+  "1x style object with custom properties": `
+const a = <div style={{ "--gap": gap(), "--color": "red" }} />;
+`,
+  "1x style object with important": `
+const a = <div style={{ color: "red !important" }} />;
+`,
+  "1x style object numeric values": `
+const a = <div style={{ "z-index": 3, opacity: 0.5 }} />;
+`,
+  "1x style static string": `
+const a = <div style="color: red; background: blue" />;
+`,
+  "1x classList quoted keys with spaces": `
+const a = <div classList={{ "a b": on(), c: off() }} />;
+`,
+  "1x classList spread value": `
+const a = <div classList={{ ...base(), extra: on() }} />;
+`,
+
+  // --- components ----------------------------------------------------------
+  "1x component with only spread": `
+const a = <Comp {...props()} />;
+`,
+  "1x component children render prop": `
+const a = <Comp>{item => <div>{item.name}</div>}</Comp>;
+`,
+  "1x children attribute shadowed by jsx child": `
+const a = <Comp children={other()}><div>D</div></Comp>;
+`,
+  "1x children attribute shadowed by text child": `
+const a = <Comp children={other()}>text</Comp>;
+`,
+  "1x children attribute shadowed by whitespace child": `
+const a = <Comp children={other()}>   </Comp>;
+`,
+  "1x children attribute shadowed by comment child": `
+const a = <Comp children={other()}>{/* nothing */}</Comp>;
+`,
+  "1x children attribute shadowed by multiple children": `
+const a = <Comp children={other()}><div>D</div><span>S</span></Comp>;
+`,
+  "1x children attribute with jsx value shadowed": `
+const a = <Comp children={<b>{x()}</b>}><div>{y()}</div></Comp>;
+`,
+  "1x children attribute before spread shadowed": `
+const a = <Comp children={other()} {...rest()}><div>D</div></Comp>;
+`,
+  "1x children attribute after spread shadowed": `
+const a = <Comp {...rest()} children={other()}><div>D</div></Comp>;
+`,
+  "1x static children attribute shadowed": `
+const a = <Comp children="s"><div>D</div></Comp>;
+`,
+  "1x children attribute kept without jsx children": `
+const a = <Comp children={other()} />;
+`,
+  "1x children attribute on native element with children": `
+const a = <div children={other()}><span>S</span></div>;
+`,
+  "1x component three deep member tag": `
+const a = <a.b.c prop={x()} />;
+`,
+  "1x component static and dynamic props mixed": `
+const a = <Comp s="static" n={1} d={dyn()} f={() => go()} />;
+`,
+  "1x component nested component in prop and children": `
+const a = <Outer slot={<Inner v={x()} />}><Inner v={y()} /></Outer>;
+`,
+  "1x component prop is jsx element list": `
+const a = <Comp items={[<div>{x()}</div>, <span>{y()}</span>]} />;
+`,
+  "1x builtin For with dynamic fallback": `
+const a = <For each={items()} fallback={<div>{empty()}</div>}>{item => <li>{item}</li>}</For>;
+`,
+  "1x builtin Show with keyed and fallback": `
+const a = <Show when={cond()} keyed fallback={<div>F</div>}>{v => <li>{v}</li>}</Show>;
+`,
+  "1x component with key prop": `
+const a = <Comp key={id()} value={v()} />;
+`,
+
+  // --- refs and events -----------------------------------------------------
+  "1x ref optional chaining member": `
+const a = <div ref={obj.inner.el} />;
+`,
+  "1x ref computed member": `
+const a = <div ref={refs[key]} />;
+`,
+  "1x event handler object with handleEvent": `
+const a = <div on:custom={{ handleEvent: h, once: true }} />;
+`,
+  "1x oncapture namespace handler": `
+const a = <div oncapture:click={h} />;
+`,
+  "1x static function reference handler": `
+const a = <div onClick={handler} onMouseMove={other} />;
+`,
+  "1x delegated handler with bound data": `
+const a = <div onClick={[handler, id()]} />;
+`,
+  "1x non delegated dom event": `
+const a = <video onVolumeChange={h} onEnded={h2} />;
+`,
+  "1x event on component is a prop": `
+const a = <Comp onClick={h} />;
+`,
+  "1x ref and spread ordering": `
+const a = <div {...rest()} ref={el} />;
+`,
+  "1x ref after spread with directive": `
+const a = <div {...rest()} ref={el} use:dir={value()} />;
+`,
+
+  // --- syntax positions ----------------------------------------------------
+  "1x jsx in object getter": `
+const o = { get a() { return <div>{x()}</div>; } };
+const z = <p>P</p>;
+`,
+  "1x jsx in class field arrow": `
+class A { render = () => <div>{this.x}</div>; }
+`,
+  "1x await hole in async arrow": `
+const f = async () => <div>{await load()}</div>;
+`,
+  "1x jsx returned from await expression": `
+const f = async () => <div>{(await load()).name}</div>;
+`,
+  "1x jsx in immediately nested closures": `
+const a = <div>{() => () => <span>{x()}</span>}</div>;
+`,
+  "1x jsx in optional call argument": `
+const a = <div>{fn?.(<span>{x()}</span>)}</div>;
+`,
+  "1x jsx in comma expression attribute": `
+const a = <div id={(setup(), id())} />;
+`,
+  "1x jsx child is a spread array": `
+const a = <div>{[...items()]}</div>;
+`,
+
+  // --- templates and dedup -------------------------------------------------
+  "1x identical templates with different holes": `
+const a = <div class="c">{x()}</div>;
+const b = <div class="c">{y()}</div>;
+`,
+  "1x template differing only by attribute order": `
+const a = <div id="i" class="c" />;
+const b = <div class="c" id="i" />;
+`,
+  "1x same markup as element and as component child": `
+const a = <div><span>B</span></div>;
+const b = <Comp><div><span>B</span></div></Comp>;
+`,
+  "1x void element self closed and paired": `
+const a = <div><input /><img src="s" /></div>;
+`,
+  "1x custom element with dash and dynamic prop": `
+const a = <my-widget attr:size={size()} prop:model={model()} />;
+`,
+  "1x is attribute on builtin element": `
+const a = <button is="my-button" onClick={h}>go</button>;
+`,
+  "1x nested table structure with dynamic rows": `
+const a = <table><tbody>{rows()}</tbody></table>;
+`,
+  "1x select with dynamic value and options": `
+const a = <select value={v()}><option value="a">A</option>{more()}</select>;
+`,
+  // --- spread / merge shapes ----------------------------------------------
+  "1x component spread of call result": `
+const a = <Comp {...get()} />;
+`,
+  "1x component spread of member call": `
+const a = <Comp {...obj.get()} />;
+`,
+  "1x component spread of member": `
+const a = <Comp {...obj.props} />;
+`,
+  "1x component spread of nested call": `
+const a = <Comp {...get()()} />;
+`,
+  "1x component spread of object literal with getter": `
+const a = <Comp {...{ get a() { return x(); }, b: 1 }} />;
+`,
+  "1x component spread of conditional": `
+const a = <Comp {...(cond() ? one() : two())} />;
+`,
+  "1x element spread of call result": `
+const a = <div {...get()} />;
+`,
+  "1x element two spreads with static between": `
+const a = <div {...a()} id="i" {...b()} />;
+`,
+  "1x element spread with event and class": `
+const a = <div {...rest()} onClick={h} class="c" />;
+`,
+  "1x element spread then innerHTML": `
+const a = <div {...rest()} innerHTML={html()} />;
+`,
+  "1x spread inline object with events": `
+const a = <div {...{ onClick: h, id: "i" }} />;
+`,
+
+  // --- namespaces on components -------------------------------------------
+  "1x attr and prop namespaces on component": `
+const a = <Comp attr:x={x()} prop:y={y()} />;
+`,
+  "1x use directive on component": `
+const a = <Comp use:dir={value()} />;
+`,
+  "1x on namespace on component": `
+const a = <Comp on:custom={h} oncapture:custom={h2} />;
+`,
+  "1x class and style namespaces on component": `
+const a = <Comp class:active={on()} style:color={c()} />;
+`,
+
+  // --- refs across modes ---------------------------------------------------
+  "1x ref on component and element together": `
+const a = <div ref={el}><Comp ref={inner} /></div>;
+`,
+  "1x ref with initializer function call": `
+const a = <div ref={makeRef()} />;
+`,
+  "1x two refs on nested elements": `
+const a = <div ref={outer}><span ref={inner} /></div>;
+`,
+
+  // --- built-in nesting ----------------------------------------------------
+  "1x For inside Show with fallbacks": `
+const a = (
+  <Show when={ready()} fallback={<div>L</div>}>
+    <For each={items()} fallback={<div>E</div>}>{i => <li>{i}</li>}</For>
+  </Show>
+);
+`,
+  "1x builtin with spread and children function": `
+const a = <For {...rest()} each={items()}>{i => <li>{i}</li>}</For>;
+`,
+  "1x builtin as component prop value": `
+const a = <Comp p={<For each={items()}>{i => <li>{i}</li>}</For>} />;
+`,
+  "1x Dynamic component member expression": `
+const a = <Dynamic component={mod.Comp} p={x()} />;
+`,
+
+  // --- ssr escaping and shapes --------------------------------------------
+  "1x attribute value with quotes and angle brackets": `
+const a = <div title={'a"b<c>d'} data-x="e&f" />;
+`,
+  "1x text with script-like content": `
+const a = <div>{"</div><script>"}</div>;
+`,
+  "1x style tag with css text": `
+const a = <style>{".a { color: red }"}</style>;
+`,
+  "1x pre element preserving whitespace": `
+const a = <pre>  keep
+  this  </pre>;
+`,
+  "1x nested dynamic between static siblings": `
+const a = <div><a>A</a>{mid()}<span>S</span></div>;
+`,
+  "1x leading and trailing dynamic children": `
+const a = <div>{head()}<span>S</span>{tail()}</div>;
+`,
+  "1x component between dynamic children": `
+const a = <div>{head()}<Comp />{tail()}</div>;
+`,
+  "1x fragment root with dynamic and components": `
+const a = <>{head()}<Comp /><div>D</div>{tail()}</>;
+`,
+
+  // --- innerHTML / textContent ---------------------------------------------
+  "1x innerHTML dynamic with sibling attribute": `
+const a = <div innerHTML={html()} id={id()} />;
+`,
+  "1x textContent dynamic with sibling attribute": `
+const a = <div textContent={text()} id={id()} />;
+`,
+  "1x innerText dynamic": `
+const a = <div innerText={text()} />;
+`,
+
+  // --- events ---------------------------------------------------------------
+  "1x same event delegated on nested elements": `
+const a = <div onClick={outer}><span onClick={inner}>S</span></div>;
+`,
+  "1x event handler dynamic expression": `
+const a = <div onClick={handlers().click} />;
+`,
+  "1x event named on with no suffix": `
+const a = <div on={h} />;
+`,
+  "1x onCapture suffix camel": `
+const a = <div onClickCapture={h} />;
+`,
+
+  // --- expression holes -----------------------------------------------------
+  "1x hole is a plain identifier": `
+const a = <div>{value}</div>;
+`,
+  "1x hole is a member chain": `
+const a = <div>{obj.a.b}</div>;
+`,
+  "1x hole is a literal number": `
+const a = <div>{42}</div>;
+`,
+  "1x hole is a template literal": `
+const a = <div>{\`t-\${x()}\`}</div>;
+`,
+  "1x hole is an array of calls": `
+const a = <div>{[one(), two()]}</div>;
+`,
+  "1x hole is an object literal": `
+const a = <div>{{ toString: () => x() }}</div>;
+`,
+  "1x hole is a function call chain": `
+const a = <div>{a().b().c()}</div>;
+`,
+  "1x hole is an arrow returning value": `
+const a = <div>{() => x()}</div>;
+`,
+  "1x hole is a class expression": `
+const a = <div>{class X {}}</div>;
+`,
+  "1x hole with unary and typeof": `
+const a = <div>{-count()}{typeof x()}</div>;
+`,
+
+  // --- this and scope -------------------------------------------------------
+  "1x this in arrow inside method jsx": `
+class A {
+  m() {
+    return <div onClick={() => this.go()} id={this.id} />;
+  }
+}
+`,
+  "1x this in nested class methods": `
+class A {
+  m() {
+    class B {
+      n() {
+        return <div a={this.b} />;
+      }
+    }
+    return <div c={this.d} />;
+  }
+}
+`,
+  "1x this in object method inside jsx prop": `
+class A {
+  m() {
+    return <Comp p={{ n() { return this.q; } }} r={this.s} />;
+  }
+}
+`,
+  "1x super property in method jsx": `
+class A extends B {
+  m() {
+    return <div a={super.x} />;
+  }
+}
+`,
+  "1x arguments in function jsx": `
+function f() {
+  return <div a={arguments[0]} />;
+}
+`,
+
+  // --- template shape -------------------------------------------------------
+  "1x element with many static attributes": `
+const a = <div id="i" class="c" title="t" lang="en" dir="ltr" tabindex="0" />;
+`,
+  "1x deeply nested static tree": `
+const a = <div><div><div><div><div>deep</div></div></div></div></div>;
+`,
+  "1x many siblings with one dynamic": `
+const a = <ul><li>1</li><li>2</li><li>3</li><li>{x()}</li><li>5</li></ul>;
+`,
+  "1x self closing paired equivalence": `
+const a = <div><span /><span></span></div>;
+`,
+  "1x attribute with empty string value": `
+const a = <div id="" class="" />;
+`,
+  "1x attribute with only expression string": `
+const a = <div id={"i"} />;
+`,
+  "1x attribute with numeric expression": `
+const a = <div tabindex={0} />;
+`,
+  "1x attribute boolean expression false": `
+const a = <input disabled={false} />;
 `
 };
 
