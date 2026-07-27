@@ -218,9 +218,19 @@ const structuralPlugin = () => ({
       p.replaceWithMultiple(p.node.declarations.map(d => t.variableDeclaration(p.node.kind, [d])));
     },
     BlockStatement(p) {
-      if (p.parentPath.isBlockStatement() || p.parentPath.isProgram()) {
-        p.replaceWithMultiple(p.node.body);
-      }
+      if (!p.parentPath.isBlockStatement() && !p.parentPath.isProgram()) return;
+      // A nested block is only a grouping artifact when it declares nothing
+      // block-scoped. Flattening `{ let x; }` into its parent changes scope,
+      // and two sibling blocks binding the same name collide outright — which
+      // silently voided the comparison instead of reporting a difference.
+      const declaresLexically = p.node.body.some(
+        statement =>
+          (statement.type === "VariableDeclaration" && statement.kind !== "var") ||
+          statement.type === "ClassDeclaration" ||
+          statement.type === "FunctionDeclaration"
+      );
+      if (declaresLexically) return;
+      p.replaceWithMultiple(p.node.body);
     },
     VariableDeclarator(p) {
       const init = p.get("init");

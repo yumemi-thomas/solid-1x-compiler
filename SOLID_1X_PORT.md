@@ -47,9 +47,14 @@ regenerate the baseline whenever a fixture reaches parity.
 The current corpus contains:
 
 - **73/73** whole-file fixture cases at exact normalized parity.
-- **3,967/3,967** valid focused probe comparisons at parity across all nine
-  output modes (442 probe cases). Eleven additional entries are explicit
-  Babel 1.x compiler failures.
+- **3,847/3,847** focused probe comparisons at parity across all nine output
+  modes (442 probe cases, 3,978 entries). The remaining 131 entries make no
+  comparison and are counted separately rather than as passes: 106 where both
+  compilers reject the input (TypeScript syntax, tags outside the `dynamic`
+  renderer's element list, `data-hk` validation), 14 where both emit
+  syntactically invalid JavaScript so there is nothing to compare — Babel 1.x
+  hoists an `await` out of its async function, and the Oxc compiler reproduces
+  that faithfully — and 11 explicit one-sided Babel 1.x compiler failures.
 - **332/332** valid cross-mode fixture-union comparisons at parity. Six inputs
   are rejected by both compilers, and eight universal-mode entries are
   explicit cases where Babel 1.x prints syntactically invalid JavaScript.
