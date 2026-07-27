@@ -20,7 +20,6 @@ mod signature;
 mod transform;
 
 use napi::bindgen_prelude::*;
-#[cfg(not(feature = "native-facts"))]
 use napi_derive::napi;
 use oxc_allocator::Allocator;
 use oxc_codegen::{Codegen, CodegenOptions};
@@ -31,7 +30,7 @@ use transform::{Bundler, RefreshConfig, RefreshTransform};
 
 pub const DEFAULT_IMPORT_SOURCE: &str = "solid-refresh";
 
-#[cfg_attr(not(feature = "native-facts"), napi(object))]
+#[napi(object)]
 #[derive(Default)]
 pub struct TransformRefreshOptions {
     /// Used for `location` metadata (cwd-relative, like the Babel plugin)

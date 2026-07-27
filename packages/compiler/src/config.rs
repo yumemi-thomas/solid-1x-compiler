@@ -1,9 +1,8 @@
 use napi::bindgen_prelude::*;
-#[cfg(not(feature = "native-facts"))]
 use napi_derive::napi;
 use oxc_span::SourceType;
 
-#[cfg_attr(not(feature = "native-facts"), napi(object))]
+#[napi(object)]
 #[derive(Default)]
 pub struct RendererOption {
     pub name: String,
@@ -11,7 +10,7 @@ pub struct RendererOption {
     pub elements: Vec<String>,
 }
 
-#[cfg_attr(not(feature = "native-facts"), napi(object))]
+#[napi(object)]
 #[derive(Default)]
 pub struct TransformOptions {
     pub filename: Option<String>,
@@ -49,7 +48,7 @@ pub struct TransformOptions {
     pub renderers: Option<Vec<RendererOption>>,
 }
 
-#[cfg_attr(not(feature = "native-facts"), napi(object))]
+#[napi(object)]
 pub struct TransformResult {
     pub code: String,
     pub map: Option<String>,

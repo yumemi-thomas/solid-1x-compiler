@@ -19,8 +19,16 @@ jobs:
         with:
           workspaces: packages/compiler
       - run: cargo fmt --manifest-path packages/compiler/Cargo.toml -- --check
-      - run: cargo clippy --manifest-path packages/compiler/Cargo.toml --features native-facts --all-targets
-      - run: cargo test --manifest-path packages/compiler/Cargo.toml --features native-facts
+      # Both configurations: the Node addon build, then the Node-free core the
+      # Rust consumers link (where the integration tests run).
+      - run: cargo clippy --manifest-path packages/compiler/Cargo.toml --all-targets
+      - run: cargo clippy --manifest-path packages/compiler/Cargo.toml --no-default-features --all-targets
+      - run: cargo test --manifest-path packages/compiler/Cargo.toml
+      - run: cargo test --manifest-path packages/compiler/Cargo.toml --no-default-features
+      # `native-facts` is a deprecated alias existing pins still pass. It must
+      # stay inert: enabling it alongside the default features must not strip
+      # anything the Node adapter needs.
+      - run: cargo check --manifest-path packages/compiler/Cargo.toml --features native-facts --all-targets
 
   conformance:
     runs-on: ubuntu-latest

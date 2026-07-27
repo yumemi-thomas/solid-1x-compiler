@@ -8,7 +8,6 @@
 //! project-relative path afterwards — that half stays in the plugin.
 
 use napi::bindgen_prelude::*;
-#[cfg(not(feature = "native-facts"))]
 use napi_derive::napi;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
@@ -25,7 +24,7 @@ use crate::config::{source_type_for_filename, TransformResult};
 
 pub const LAZY_PLACEHOLDER_PREFIX: &str = "__SOLID_LAZY_MODULE__:";
 
-#[cfg_attr(not(feature = "native-facts"), napi(object))]
+#[napi(object)]
 #[derive(Default)]
 pub struct TransformLazyOptions {
     /// Mirrors the Babel plugin: without a filename the pass is a no-op

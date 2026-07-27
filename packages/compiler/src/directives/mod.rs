@@ -14,7 +14,6 @@ mod validate;
 pub(crate) mod xxhash;
 
 use napi::bindgen_prelude::*;
-#[cfg(not(feature = "native-facts"))]
 use napi_derive::napi;
 use oxc_allocator::Allocator;
 use oxc_codegen::{Codegen, CodegenOptions};
@@ -27,7 +26,7 @@ const DEFAULT_RUNTIME: &str = "@solidjs/web/server-functions";
 
 /// A runtime import override, mirroring the Babel plugin's
 /// `ImportDefinition` (`kind: "named" | "default"`).
-#[cfg_attr(not(feature = "native-facts"), napi(object))]
+#[napi(object)]
 #[derive(Default)]
 pub struct DirectiveImportOption {
     pub kind: Option<String>,
@@ -35,7 +34,7 @@ pub struct DirectiveImportOption {
     pub source: String,
 }
 
-#[cfg_attr(not(feature = "native-facts"), napi(object))]
+#[napi(object)]
 #[derive(Default)]
 pub struct TransformDirectivesOptions {
     pub filename: Option<String>,
@@ -58,7 +57,7 @@ pub struct TransformDirectivesOptions {
 }
 
 /// One extracted server function, for the bundler plugin's manifest.
-#[cfg_attr(not(feature = "native-facts"), napi(object))]
+#[napi(object)]
 pub struct ServerFunctionMeta {
     /// The wire ID (`<hash>-<count>[-<name>]`).
     pub id: String,
@@ -69,7 +68,7 @@ pub struct ServerFunctionMeta {
     pub exports: Vec<String>,
 }
 
-#[cfg_attr(not(feature = "native-facts"), napi(object))]
+#[napi(object)]
 pub struct TransformDirectivesResult {
     pub code: String,
     pub map: Option<String>,
