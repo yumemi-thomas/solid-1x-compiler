@@ -252,13 +252,27 @@ impl<'a, 'source> AstDomTransform<'a, 'source> {
         // rather than attribute handling (Babel parity): when the element has
         // no real children, the value becomes its child expression; when it
         // does, the attribute is dropped.
+        //
+        // "Non-literal" is judged after constant folding, because that is the
+        // order Babel runs in: its fold rewrites every attribute value before
+        // the `children` capture ever sees it, so a value that folds to a
+        // string or number is a literal there and lowers as a `children`
+        // property write. Judging the raw AST here instead promoted the value
+        // AND left the attribute plan alive — the same value emitted twice,
+        // and two trace decisions colliding over one censused site.
         let attribute_child =
             (element.children.is_empty()
                 && !element.opening_element.attributes.iter().any(|attr| {
                     matches!(attr, oxc_ast::ast::JSXAttributeItem::SpreadAttribute(_))
                 }))
             .then(|| children_attribute_container(element))
-            .flatten();
+            .flatten()
+            .filter(|container| {
+                container
+                    .expression
+                    .as_expression()
+                    .is_none_or(|expression| self.evaluate_confident(expression).is_none())
+            });
         // Which `children` value was promoted, so the attribute loop can tell
         // it apart from sibling `children` attributes the promotion dropped.
         let promoted_children_span = attribute_child.map(|container| container.expression.span());

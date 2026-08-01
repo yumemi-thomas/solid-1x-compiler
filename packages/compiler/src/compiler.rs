@@ -539,6 +539,64 @@ const view = <button title={label()} onClick={() => act()}>
         );
     }
 
+    /// The same census-vs-lowering disagreement, across every spelling the
+    /// census names specially and both lowering paths (the full emission for
+    /// template roots, the static fast path for nested elements).
+    ///
+    /// Each of these once failed the whole file — the folded `on*` and `ref`
+    /// as unresolved callback sites, the `children` forms and every nested
+    /// form as a category mismatch, because the recording hardcoded
+    /// NativeAttribute where the census had guessed another kind.
+    #[test]
+    fn every_folded_special_attribute_still_compiles_with_a_total_trace() {
+        for source in [
+            "const s = \"x\";\nconst view = <div onLy={s} />;",
+            "const r = \"x\";\nconst view = <div ref={r} />;",
+            "const c = \"x\";\nconst view = <div children={c} />;",
+            "const s = \"x\";\nconst view = <div><span onClick={s} /></div>;",
+            "const r = \"x\";\nconst view = <div><span ref={r} /></div>;",
+            "const c = \"x\";\nconst view = <div><span children={c} /></div>;",
+        ] {
+            let trace = compile(
+                source,
+                &CompileOptions {
+                    semantic_trace: true,
+                    ..CompileOptions::default()
+                },
+            )
+            .unwrap_or_else(|error| panic!("{source}: {error}"))
+            .semantic_trace
+            .expect("tracing was requested");
+            assert!(
+                !trace.sites.iter().any(|site| matches!(
+                    site.kind,
+                    crate::semantic_trace::ExecutionSiteKind::EventHandler
+                        | crate::semantic_trace::ExecutionSiteKind::Ref
+                )),
+                "{source}: a folded callback leaves no callback site: {:?}",
+                trace.sites
+            );
+        }
+    }
+
+    /// The dispatch decides by the censused kind, not by dropping sites: a
+    /// `children` attribute that survives to run — as a property write, or
+    /// reactively — still reports, under the JsxChild kind the census gave it.
+    #[test]
+    fn surviving_children_attributes_report_under_their_censused_kind() {
+        let children_decisions = decisions("const view = <div children={value()} />;");
+        assert!(
+            children_decisions.contains(&("value()", "reactive-rerun")),
+            "a dynamic children attribute is a live JSX child: {children_decisions:?}"
+        );
+
+        let ref_decisions = decisions("const view = <div ref={node} />;");
+        assert!(
+            ref_decisions.contains(&("node", "ref-apply")),
+            "an unfoldable ref is still a ref callback: {ref_decisions:?}"
+        );
+    }
+
     #[test]
     fn an_event_handler_is_a_deferred_callback() {
         let decisions = decisions("const view = <div onClick={() => act()} />;");

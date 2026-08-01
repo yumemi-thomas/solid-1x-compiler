@@ -182,27 +182,18 @@ impl<'a> AstDomTransform<'a, '_> {
             if matches!(
                 disposition,
                 PlanDisposition::Skip | PlanDisposition::Inline(_)
-            ) && plan.key != "children"
-                && plan.key != "ref"
-            {
-                for span in &plan.semantic_spans {
-                    if plan.key.starts_with("on") {
-                        // The census names an `on*` attribute an event handler
-                        // from its spelling alone. Reaching here means the
-                        // value folded to a constant and went into the
-                        // template as static text, so there is no handler at
-                        // runtime and no decision to record — withdraw the
-                        // site instead of leaving it unresolved, which failed
-                        // the whole file.
-                        self.semantic_trace.retract(
-                            *span,
-                            crate::semantic_trace::ExecutionSiteKind::EventHandler,
-                        );
-                        continue;
-                    }
-                    self.semantic_trace.value(
+            ) {
+                // A promoted `children` value is reported by child insertion.
+                // Everything else here resolved as data — the census-kind
+                // dispatch decides value sites and withdraws callback sites,
+                // so a folded `on*`/`ref`/`children` no longer fails the file.
+                for span in plan
+                    .semantic_spans
+                    .iter()
+                    .filter(|span| Some(**span) != promoted_children_span)
+                {
+                    self.semantic_trace.resolve_lowered_attribute(
                         *span,
-                        crate::semantic_trace::ExecutionSiteKind::NativeAttribute,
                         crate::semantic_trace::ValueDecision::Elided,
                     );
                 }
@@ -536,10 +527,16 @@ impl<'a> AstDomTransform<'a, '_> {
             && (self.classify().is_dynamic(None, &raw, false)
                 || ((plan.key == "classList" || plan.key == "style")
                     && self.evaluate_confident(&raw).is_none()));
-        for span in &semantic_spans {
-            self.semantic_trace.value(
+        // The census-kind dispatch matters for one runtime plan: a `children`
+        // attribute lowered as a property write is censused as a JSX child,
+        // and recording it as a native attribute mismatched the category. A
+        // promoted `children` value is reported by child insertion instead.
+        for span in semantic_spans
+            .iter()
+            .filter(|span| Some(**span) != promoted_children_span)
+        {
+            self.semantic_trace.resolve_lowered_attribute(
                 *span,
-                crate::semantic_trace::ExecutionSiteKind::NativeAttribute,
                 if dynamic {
                     crate::semantic_trace::ValueDecision::ReactiveRerun
                 } else {
@@ -837,13 +834,13 @@ impl<'a> AstDomTransform<'a, '_> {
             semantic_spans.extend(plan.semantic_spans.iter().copied());
         }
         // Everything inlined into the template string: no value survives to
-        // run at runtime.
+        // run at runtime. Kind-dispatched because this path sees every
+        // spelling — a folded `on*`/`ref`/`children` on a nested static
+        // element lands here, and a hardcoded NativeAttribute record
+        // mismatched the census and failed the file.
         for span in semantic_spans {
-            self.semantic_trace.value(
-                span,
-                crate::semantic_trace::ExecutionSiteKind::NativeAttribute,
-                crate::semantic_trace::ValueDecision::Elided,
-            );
+            self.semantic_trace
+                .resolve_lowered_attribute(span, crate::semantic_trace::ValueDecision::Elided);
         }
         for (key, value) in pending {
             match value {
