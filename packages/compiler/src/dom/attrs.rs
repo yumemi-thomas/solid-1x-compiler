@@ -184,9 +184,22 @@ impl<'a> AstDomTransform<'a, '_> {
                 PlanDisposition::Skip | PlanDisposition::Inline(_)
             ) && plan.key != "children"
                 && plan.key != "ref"
-                && !plan.key.starts_with("on")
             {
                 for span in &plan.semantic_spans {
+                    if plan.key.starts_with("on") {
+                        // The census names an `on*` attribute an event handler
+                        // from its spelling alone. Reaching here means the
+                        // value folded to a constant and went into the
+                        // template as static text, so there is no handler at
+                        // runtime and no decision to record — withdraw the
+                        // site instead of leaving it unresolved, which failed
+                        // the whole file.
+                        self.semantic_trace.retract(
+                            *span,
+                            crate::semantic_trace::ExecutionSiteKind::EventHandler,
+                        );
+                        continue;
+                    }
                     self.semantic_trace.value(
                         *span,
                         crate::semantic_trace::ExecutionSiteKind::NativeAttribute,

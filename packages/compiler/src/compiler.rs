@@ -505,6 +505,40 @@ const view = <button title={label()} onClick={() => act()}>
         );
     }
 
+    /// An `on*` value that folds to a constant becomes template text, so no
+    /// handler exists at runtime to decide about.
+    ///
+    /// The census names a site from the attribute's spelling, before lowering
+    /// has folded anything, so it called this one an event handler; nothing
+    /// then decided it, and `finish()` fails a compile with an undecided site.
+    /// One such attribute anywhere therefore made the whole file unanalysable
+    /// rather than merely untraced. The site is withdrawn instead.
+    #[test]
+    fn a_folded_event_handler_leaves_no_unresolved_site() {
+        let source = "const handler = \"alert(1)\";\nconst view = <div onClick={handler}>{count()}</div>;";
+        let decisions = decisions(source);
+        assert!(
+            !decisions.iter().any(|(text, _)| *text == "handler"),
+            "the folded handler is template text, so no site survives for it: {decisions:?}"
+        );
+        // Retraction is surgical: the rest of the element still traces.
+        assert!(
+            decisions.contains(&("count()", "reactive-rerun")),
+            "unrelated sites must be unaffected: {decisions:?}"
+        );
+    }
+
+    /// The counterpart: a handler the compiler cannot fold is still a real
+    /// listener, so the retraction must not swallow the ordinary case.
+    #[test]
+    fn an_unfoldable_event_handler_still_reports_its_site() {
+        let decisions = decisions("const view = <div onClick={props.handler} />;");
+        assert!(
+            decisions.contains(&("props.handler", "later-event")),
+            "an unfoldable handler is a later-event callback: {decisions:?}"
+        );
+    }
+
     #[test]
     fn an_event_handler_is_a_deferred_callback() {
         let decisions = decisions("const view = <div onClick={() => act()} />;");
