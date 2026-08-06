@@ -54,6 +54,7 @@ pub(crate) struct AstDomTransform<'a, 'source> {
     pub(crate) current_this_capture: Option<String>,
     pub(crate) function_parent_stack: std::vec::Vec<crate::shared::transform::FunctionParentKind>,
     pub(crate) next_function_class_method: bool,
+    pub(crate) lowered_function_bodies: std::collections::HashSet<usize>,
     pub(crate) statement_depth: usize,
     pub(crate) skip_xmlns_attribute: bool,
     /// After a hydration `getNextMarker` destructure, positional child walks
@@ -152,6 +153,7 @@ impl<'a, 'source> AstDomTransform<'a, 'source> {
             current_this_capture: None,
             function_parent_stack: std::vec::Vec::new(),
             next_function_class_method: false,
+            lowered_function_bodies: std::collections::HashSet::new(),
             statement_depth: 0,
             skip_xmlns_attribute: false,
             semantic_trace: crate::semantic_trace::TraceRecorder::disabled(),
