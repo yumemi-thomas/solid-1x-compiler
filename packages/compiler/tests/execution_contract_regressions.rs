@@ -25,7 +25,8 @@
 //! break.
 
 use dom_expressions_compiler::{
-    compile, CompileOptions, ExecutionSiteKind, SemanticTrace, TerminalDecision, ValueDecision,
+    compile, CompileOptions, ExecutionSiteKind, OwnershipDecision, SemanticTrace, TerminalDecision,
+    ValueDecision, Wrapper,
 };
 
 fn options(semantic_trace: bool) -> CompileOptions {
@@ -411,4 +412,59 @@ const C = (props) => _$createComponent(_$Show, {
 });
 "#
     );
+}
+
+// ---------------------------------------------------------------------------
+// Composition with the ownership trace.
+//
+// `finish()` derives `ownership_sites` from the reconciled execution sites, so
+// a census that fails the file yields no ownership evidence at all — which is
+// exactly what both shapes above used to do. These pin the composition: the
+// fixes are what make ownership reachable for them, and they leave the
+// `effect_wrapper` gate that decides whether an owner can be claimed alone.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_callback_fragment_shape_now_yields_an_owned_region() {
+    let trace = trace(FRAGMENT_IN_A_PROP_CALLBACK);
+    let owned = trace
+        .ownership_sites
+        .iter()
+        .map(|site| {
+            (
+                &FRAGMENT_IN_A_PROP_CALLBACK[site.span.start as usize..site.span.end as usize],
+                site.decision,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        owned,
+        [(
+            "props.errorState?.({ error: err, reload })",
+            OwnershipDecision::Owned,
+        )]
+    );
+}
+
+#[test]
+fn a_custom_effect_wrapper_still_makes_no_owner_claim() {
+    let options = CompileOptions {
+        effect_wrapper: Wrapper::Name("createRenderEffect".into()),
+        ..options(true)
+    };
+    let trace = compile(FRAGMENT_IN_A_PROP_CALLBACK, &options)
+        .expect("compiles")
+        .semantic_trace
+        .expect("tracing was requested");
+    assert!(!trace.sites.is_empty());
+    assert!(trace.ownership_sites.is_empty());
+}
+
+#[test]
+fn the_style_shape_reconciles_without_inventing_an_owner() {
+    // Every site here is `Elided` or `CallerContext`; none is a
+    // `ReactiveRerun`, so no owner is proven and none is reported.
+    let trace = trace(STYLE_BEFORE_SPREAD);
+    assert_eq!(trace.sites.len(), 4);
+    assert!(trace.ownership_sites.is_empty());
 }
