@@ -175,11 +175,14 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
                 dom_transform_config(options, options.built_ins.clone()),
             );
             if options.semantic_trace {
-                transform.semantic_trace = TraceRecorder::new(ExecutionCensus::from_program(
-                    &program,
-                    &options.built_ins,
-                    options.inline_styles,
-                ));
+                transform.semantic_trace = TraceRecorder::new(
+                    ExecutionCensus::from_program(
+                        &program,
+                        &options.built_ins,
+                        options.inline_styles,
+                    ),
+                    matches!(options.effect_wrapper, Wrapper::Default),
+                );
             }
             transform.visit_program(&mut program);
             if let Some(error) = transform.error.take() {
