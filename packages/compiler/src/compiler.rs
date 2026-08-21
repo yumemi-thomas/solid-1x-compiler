@@ -517,7 +517,8 @@ const view = <button title={label()} onClick={() => act()}>
     /// rather than merely untraced. The site is withdrawn instead.
     #[test]
     fn a_folded_event_handler_leaves_no_unresolved_site() {
-        let source = "const handler = \"alert(1)\";\nconst view = <div onClick={handler}>{count()}</div>;";
+        let source =
+            "const handler = \"alert(1)\";\nconst view = <div onClick={handler}>{count()}</div>;";
         let decisions = decisions(source);
         assert!(
             !decisions.iter().any(|(text, _)| *text == "handler"),

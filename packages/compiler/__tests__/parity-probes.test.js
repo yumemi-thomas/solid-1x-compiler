@@ -303,6 +303,11 @@ const b = <pre>{"line1"}
   raw \` backtick and $\{fake} interp
 </pre>;
 `,
+  "ssr attribute template literal quasis": `
+const a = <div title={\`a"b&c \${x()} d\`} />;
+const b = <div data-src={\`url("\${u()}")\`} />;
+const c = <div>{\`a"b&c<d \${x()}\`}</div>;
+`,
   "html entities": `
 const a = <div title="a&amp;b &lt;c&gt; &quot;d&quot;">&nbsp;&lt;tag&gt; &amp;&amp; &#169; text</div>;
 `,

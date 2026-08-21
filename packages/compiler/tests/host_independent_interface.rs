@@ -138,4 +138,3 @@ fn the_trace_round_trips_through_serde() {
         serde_json::from_str(&json).expect("deserialize");
     assert_eq!(parsed, trace);
 }
-

@@ -2557,6 +2557,34 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
         value
     }
 
+    /// Babel's `escapeTemplateQuasis(expression, true)`: HTML-escape the
+    /// static text of a template literal used in attribute position.
+    ///
+    /// Two writes, because the two halves of a quasi mean different things.
+    /// `cooked` is the string value, so it takes the escaped text as-is.
+    /// `raw` is the literal's source spelling and is what oxc's codegen
+    /// prints (`TemplateLiteral`'s `Gen` reads `quasi.value.raw`), exactly as
+    /// Babel's codegen does — so the escaped text has to go back through
+    /// template-literal quoting or a `\`` or `${` that survived escaping
+    /// would terminate the literal or open an interpolation. Escaping that
+    /// changed nothing is not written at all, so a compiler-built quasi whose
+    /// `raw` and `cooked` are the same atom keeps that shape.
+    fn escape_template_quasis(&self, template: &mut oxc_ast::ast::TemplateLiteral<'a>) {
+        for quasi in template.quasis.iter_mut() {
+            let source = quasi.value.cooked.unwrap_or(quasi.value.raw);
+            let escaped = escape_html_attribute(source.as_str());
+            if escaped == source.as_str() {
+                continue;
+            }
+            let raw = escaped
+                .replace('\\', "\\\\")
+                .replace('`', "\\`")
+                .replace("${", "\\${");
+            quasi.value.cooked = Some(self.ast().atom(&escaped));
+            quasi.value.raw = self.ast().atom(&raw);
+        }
+    }
+
     fn escape_expression_in_place(
         &mut self,
         value: &mut Expression<'a>,
@@ -2673,6 +2701,13 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
                 }
             }
             Expression::TemplateLiteral(template) => {
+                // Interpolations are escaped recursively. The static quasis
+                // are not — `url("${x}")` would otherwise leave a raw `"`
+                // inside style="..." / attr="...", which HTML parses as
+                // attribute injection.
+                if attr {
+                    self.escape_template_quasis(template);
+                }
                 for expression in template.expressions.iter_mut() {
                     self.escape_expression_in_place(expression, attr, escape_literals);
                 }
