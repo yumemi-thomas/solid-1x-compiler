@@ -4,7 +4,12 @@
 DOM Expressions' Oxc compiler on `next` and treats the Babel compiler on `main`
 as the behavioral reference.
 
-Upstream revisions and license provenance are recorded in
+**The parity target is `babel-plugin-jsx-dom-expressions@0.40.10`** — the
+version vendored under `packages/babel-plugin-jsx-dom-expressions`. "1.x
+parity" means matching that exact version's output, not merely the 1.x line.
+
+Upstream revisions, the 0.40.7 → 0.40.10 move, and intentional divergences
+(including the still-excluded hydration-id codegen change) are recorded in
 [PROVENANCE.md](PROVENANCE.md).
 
 ## Workflow
@@ -47,8 +52,8 @@ regenerate the baseline whenever a fixture reaches parity.
 The current corpus contains:
 
 - **73/73** whole-file fixture cases at exact normalized parity.
-- **3,919/3,919** focused probe comparisons at parity across all nine output
-  modes (442 probe cases, 3,978 entries). The remaining 59 entries make no
+- **3,937/3,937** focused probe comparisons at parity across all nine output
+  modes (444 probe cases, 3,996 entries). The remaining 59 entries make no
   comparison and are counted separately rather than as passes: 34 where both
   compilers reject the input (TypeScript syntax, tags outside the `dynamic`
   renderer's element list), 14 where both emit syntactically invalid
@@ -61,9 +66,12 @@ The current corpus contains:
 - **332/332** valid cross-mode fixture-union comparisons at parity. Six inputs
   are rejected by both compilers, and eight universal-mode entries are
   explicit cases where Babel 1.x prints syntactically invalid JavaScript.
-- **135/135** option-matrix tests passing, covering each mode with one option
-  changed at a time. Twelve fixture/option entries explicitly record Babel
-  1.x's `memoWrapper: false` assertion failure while Oxc remains usable.
+- **144/144** option-matrix tests passing, covering each mode with one option
+  changed at a time (including `omitServerOnlyTemplates: false`). Sixteen
+  fixture/option entries explicitly record Babel 1.x's `memoWrapper: false`
+  assertion failure while Oxc remains usable; four of those arrived with
+  0.40.10, which routes ssr component props through `transformCondition` and
+  so makes the reference's assertion reachable in the ssr modes too.
 
 The full compiler package suite also covers validation warnings, server
 directives, refresh, lazy transforms, binding loading, and Rust classification
