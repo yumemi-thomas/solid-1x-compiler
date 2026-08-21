@@ -42,6 +42,11 @@ const variants = {
 // usable, so parity is defined only for the cases the reference can compile.
 // Keep the list exact so a newly fixed or newly broken reference case cannot
 // silently disappear from the matrix.
+//
+// The four ssr entries arrived with 0.40.10: dropping `generate !== "ssr"`
+// from `shared/component.js`'s `wrapConditionals` gate routes ssr component
+// props through `transformCondition`, so the reference's assertion is now
+// reachable in the ssr modes too.
 const referenceRejected = new Set([
   "dom/memoWrapper:false/attributeExpressions",
   "dom/memoWrapper:false/components",
@@ -54,7 +59,11 @@ const referenceRejected = new Set([
   "dynamic-universal/memoWrapper:false/components",
   "dynamic-universal/memoWrapper:false/conditionalExpressions",
   "dynamic/memoWrapper:false/conditionalExpressions",
-  "dynamic/memoWrapper:false/hybrid"
+  "dynamic/memoWrapper:false/hybrid",
+  "ssr/memoWrapper:false/components",
+  "ssr/memoWrapper:false/conditionalExpressions",
+  "ssr-hydratable/memoWrapper:false/components",
+  "ssr-hydratable/memoWrapper:false/conditionalExpressions"
 ]);
 
 describe("option-matrix parity", () => {

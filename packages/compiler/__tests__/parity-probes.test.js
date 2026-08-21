@@ -308,6 +308,12 @@ const a = <div title={\`a"b&c \${x()} d\`} />;
 const b = <div data-src={\`url("\${u()}")\`} />;
 const c = <div>{\`a"b&c<d \${x()}\`}</div>;
 `,
+  "conditional and logical component props": `
+const a = <Comp value={cond() ? x() : y()} />;
+const b = <Comp value={cond() && x()} />;
+const c = <Comp value={cond() ?? x()} />;
+const d = <Comp value={a() || b()} nested={p() ? (q() ? r() : s()) : t()} />;
+`,
   "html entities": `
 const a = <div title="a&amp;b &lt;c&gt; &quot;d&quot;">&nbsp;&lt;tag&gt; &amp;&amp; &#169; text</div>;
 `,

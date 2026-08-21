@@ -25,8 +25,11 @@ use crate::shared::component_props::{
     component_property, component_props_expression, component_spread_expression,
     flush_component_props, ComponentPropContext,
 };
-use crate::shared::condition::{zero_arg_call_thunk, ConditionBuilder};
+use crate::shared::condition::{
+    is_condition_shape, transform_condition_inline, zero_arg_call_thunk, ConditionBuilder,
+};
 use crate::shared::constants::{boolean_attributes, child_properties, reserved_namespace};
+use crate::shared::mode_lower::ModeLower;
 use crate::shared::utils::{
     decode_html_entities, element_name, escape_html_attribute, escape_html_text_expression,
     format_number, is_component_name, is_void_element, normalize_static_attribute_value,
@@ -42,6 +45,10 @@ pub(crate) struct AstSsrTransform<'a, 'source> {
     pub(crate) built_ins: std::vec::Vec<String>,
     built_in_imports: std::vec::Vec<String>,
     hydratable: bool,
+    /// `wrapConditionals`. SSR reads it for component props only; child and
+    /// fragment holes still bypass `transformCondition` (Babel's
+    /// `shared/transform.js` keeps its `generate !== "ssr"` guard).
+    wrap_conditionals: bool,
     /// The memo wrapper import name; `None` disables memo wrapping.
     memo_wrapper: Option<String>,
     static_marker: String,
@@ -167,7 +174,7 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
         source: &'source str,
         module_name: &'source str,
         hydratable: bool,
-        _wrap_conditionals: bool,
+        wrap_conditionals: bool,
         memo_wrapper: Option<String>,
         static_marker: String,
         built_ins: std::vec::Vec<String>,
@@ -179,6 +186,7 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
             built_ins,
             built_in_imports: std::vec::Vec::new(),
             hydratable,
+            wrap_conditionals,
             memo_wrapper,
             static_marker,
             uses_ssr: false,
@@ -851,6 +859,26 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
                 }
                 Some(JSXAttributeValue::ExpressionContainer(container)) => {
                     let needs_getter = self.component_prop_requires_getter(&name, container);
+                    // 0.40.10 dropped `config.generate !== "ssr"` from
+                    // `shared/component.js`'s `wrapConditionals` gate, so an
+                    // ssr prop getter now collapses a conditional's memo
+                    // inline exactly as the client generates do.
+                    if needs_getter
+                        && self.wrap_conditional_props_enabled()
+                        && container
+                            .expression
+                            .as_expression()
+                            .is_some_and(is_condition_shape)
+                    {
+                        let expression = container
+                            .expression
+                            .clone_in(self.allocator)
+                            .into_expression();
+                        let span = expression.span();
+                        let value = transform_condition_inline(self, span, expression);
+                        running_props.push(component_property(self, attr.span, &name, value, true));
+                        continue;
+                    }
                     if needs_getter {
                         // Babel leaves the raw expression in the generated
                         // getter and transforms it there on re-traversal: a
@@ -3233,10 +3261,20 @@ impl<'a> ConditionBuilder<'a> for AstSsrTransform<'a, '_> {
     }
 }
 
-impl<'a> crate::shared::mode_lower::ModeLower<'a> for AstSsrTransform<'a, '_> {
+impl<'a> ModeLower<'a> for AstSsrTransform<'a, '_> {
     fn wrap_conditionals_enabled(&self) -> bool {
-        // The SSR generate bypasses transformCondition for fragment holes.
+        // The SSR generate bypasses transformCondition for child and fragment
+        // holes: `shared/transform.js`'s gate still carries
+        // `config.generate !== "ssr"`.
         false
+    }
+
+    fn wrap_conditional_props_enabled(&self) -> bool {
+        // Component props do not: 0.40.10 dropped `config.generate !== "ssr"`
+        // from `shared/component.js`'s gate, so SSR prop getters now collapse
+        // a conditional through `transformCondition` like the client
+        // generates.
+        self.wrap_conditionals
     }
 
     /// Fragment children are top-level roots: native elements get hydration

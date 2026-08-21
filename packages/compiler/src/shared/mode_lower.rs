@@ -38,8 +38,18 @@ pub(crate) trait ModeLower<'a>: ConditionBuilder<'a> {
     ) {
     }
 
-    /// Whether `wrapConditionals` is enabled for this generate.
+    /// Whether `wrapConditionals` is enabled for child and fragment holes —
+    /// the gate in Babel's `shared/transform.js`, which still excludes the
+    /// ssr generate.
     fn wrap_conditionals_enabled(&self) -> bool;
+
+    /// Whether `wrapConditionals` is enabled for component props — the gate
+    /// in Babel's `shared/component.js`, which 0.40.10 no longer excludes the
+    /// ssr generate from. The two were one condition until then; a generate
+    /// that treats them alike inherits this.
+    fn wrap_conditional_props_enabled(&self) -> bool {
+        self.wrap_conditionals_enabled()
+    }
 
     /// Lowers a JSX element in fragment-child (root) position to a single
     /// expression: the dom generate returns the template IIFE, ssr a

@@ -153,7 +153,7 @@ pub(crate) fn lower_component_with_setup<'a, C: ComponentLower<'a>>(
                 // inline within the getter, mirroring Babel's
                 // `transformCondition(..., true)`.
                 let mut condition_inlined = false;
-                if dynamic && ctx.wrap_conditionals_enabled() && is_condition_shape(&value) {
+                if dynamic && ctx.wrap_conditional_props_enabled() && is_condition_shape(&value) {
                     let span = value.span();
                     value = transform_condition_inline(ctx, span, value);
                     condition_inlined = true;

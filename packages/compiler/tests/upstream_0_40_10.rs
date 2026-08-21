@@ -103,6 +103,78 @@ const a = _$ssr(_tmpl$, `a"b&c<d ${_$escape(x())}`);
 }
 
 // ---------------------------------------------------------------------------
+// Change 4 — `wrapConditionals` no longer excludes ssr for component props.
+//
+// Only `shared/component.js`'s gate lost `config.generate !== "ssr"`.
+// `shared/transform.js`'s gate — child and fragment holes — kept it.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_ssr_component_prop_collapses_a_conditional_through_transform_condition() {
+    assert_eq!(
+        emitted(r#"const a = <Comp value={cond() ? x() : y()} />;"#, &ssr()),
+        r#"import { memo as _$memo } from "r-server";
+import { createComponent as _$createComponent } from "r-server";
+const a = _$createComponent(Comp, { get value() {
+	return _$memo(() => {
+		return !!cond();
+	})() ? x() : y();
+} });
+"#
+    );
+}
+
+#[test]
+fn an_ssr_component_prop_collapses_a_logical_expression_too() {
+    let code = emitted(r#"const a = <Comp value={cond() && x()} />;"#, &ssr());
+    assert!(code.contains("return _$memo(() => {"), "{code}");
+    assert!(code.contains("})() && x();"), "{code}");
+}
+
+#[test]
+fn an_ssr_child_hole_still_bypasses_transform_condition() {
+    // The control: `shared/transform.js` still carries its ssr exclusion, so
+    // a conditional in child position keeps the plain escaped-branch shape.
+    assert_eq!(
+        emitted(r#"const a = <div>{cond() ? x() : y()}</div>;"#, &ssr()),
+        r#"import { escape as _$escape } from "r-server";
+import { ssr as _$ssr } from "r-server";
+var _tmpl$ = ["<div>", "</div>"];
+const a = _$ssr(_tmpl$, cond() ? _$escape(x()) : _$escape(y()));
+"#
+    );
+}
+
+#[test]
+fn wrap_conditionals_false_still_disables_the_ssr_prop_collapse() {
+    let options = CompileOptions {
+        wrap_conditionals: false,
+        ..ssr()
+    };
+    let code = emitted(
+        r#"const a = <Comp value={cond() ? x() : y()} />;"#,
+        &options,
+    );
+    assert!(!code.contains("_$memo"), "{code}");
+    assert!(code.contains("return cond() ? x() : y();"), "{code}");
+}
+
+#[test]
+fn the_dom_component_prop_shape_is_unchanged() {
+    assert_eq!(
+        emitted(r#"const a = <Comp value={cond() ? x() : y()} />;"#, &dom()),
+        r#"import { memo as _$memo } from "r-dom";
+import { createComponent as _$createComponent } from "r-dom";
+const a = _$createComponent(Comp, { get value() {
+	return _$memo(() => {
+		return !!cond();
+	})() ? x() : y();
+} });
+"#
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Changes 1 + 2 — `omitServerOnlyTemplates`, default `true`.
 //
 // An opt-out knob, so the default must emit exactly what 0.40.7 emitted.
