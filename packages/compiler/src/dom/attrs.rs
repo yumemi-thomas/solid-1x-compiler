@@ -123,38 +123,17 @@ impl<'a> AstDomTransform<'a, '_> {
             .any(|attr| matches!(attr, JSXAttributeItem::SpreadAttribute(_)));
 
         // `processSpreads` consumes native-spreadable attributes into its
-        // props object, but returns refs and Solid 1.x compiler namespaces for
-        // the ordinary attribute pipeline.
-        let filtered_attributes = if has_spread {
-            let mut filtered = std::vec::Vec::new();
-            let mut seen_spread = false;
-            for item in attributes {
-                match item {
-                    JSXAttributeItem::SpreadAttribute(_) => seen_spread = true,
-                    JSXAttributeItem::Attribute(attr) => {
-                        let dynamic = matches!(
-                            &attr.value,
-                            Some(oxc_ast::ast::JSXAttributeValue::ExpressionContainer(container))
-                                if container.expression.as_expression().is_some_and(|expression| {
-                                    self.classify().is_dynamic(
-                                        Some(container.span.start),
-                                        expression,
-                                        false,
-                                    )
-                                })
-                        );
-                        if !crate::dom::spread::can_native_spread(attr)
-                            || (!seen_spread && !dynamic)
-                        {
-                            filtered.push(item.clone_in(self.allocator));
-                        }
-                    }
-                }
-            }
-            Some(filtered)
-        } else {
-            None
-        };
+        // props object, but returns refs, Solid 1.x compiler namespaces, and
+        // the pre-spread carve-out for the ordinary attribute pipeline.
+        // `spread_routes` is the single authority on that split.
+        let filtered_attributes = has_spread.then(|| {
+            crate::dom::spread::spread_routes(attributes, &self.classify())
+                .into_iter()
+                .zip(attributes)
+                .filter(|(route, _)| *route == crate::dom::spread::SpreadRoute::Planned)
+                .map(|(_, item)| item.clone_in(self.allocator))
+                .collect::<std::vec::Vec<_>>()
+        });
         let planned_attributes = filtered_attributes.as_deref().unwrap_or(attributes);
 
         let AttrPlanOutcome {

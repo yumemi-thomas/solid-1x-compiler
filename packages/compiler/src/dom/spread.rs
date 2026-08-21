@@ -23,6 +23,70 @@ pub(crate) fn can_native_spread(attr: &oxc_ast::ast::JSXAttribute<'_>) -> bool {
     }
 }
 
+/// Where one attribute of a spread-bearing element ends up.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SpreadRoute {
+    /// A `{...expr}` token: always an operand of the merge.
+    Spread,
+    /// Peeled back out of the merge and handed to the ordinary attribute
+    /// pipeline (`AttrPlanner` → template text, static setters, dynamics).
+    Planned,
+    /// Merged whole into the runtime props object `_$spread` receives.
+    Merged,
+}
+
+/// Babel 0.40.x's positional carve-out in `processSpreads`, in one place.
+///
+/// A non-dynamic attribute written *before* the first spread token cannot be
+/// clobbered by any spread, so Babel leaves it to the ordinary attribute
+/// pipeline — where a `style`/`classList` object decomposes per declaration
+/// and literal declarations fold into the template string. Everything else on
+/// a spread-bearing element merges into the runtime props object, where the
+/// object stays one opaque value. On an element with no spread at all every
+/// attribute is planned.
+///
+/// [`crate::dom::attrs`]'s filtered planner list,
+/// [`AstDomTransform::spread_attribute_statement`]'s merge loop, and the
+/// execution census in [`crate::semantic_trace`] all read this function. The
+/// rule is positional and per-attribute; expressing it a second time as an
+/// element-wide "has a spread anywhere" test is what let the census enumerate
+/// a `style` object at a granularity lowering never uses.
+pub(crate) fn spread_routes(
+    attributes: &[JSXAttributeItem<'_>],
+    classify: &crate::shared::classify::Classify<'_>,
+) -> std::vec::Vec<SpreadRoute> {
+    let has_spread = attributes
+        .iter()
+        .any(|item| matches!(item, JSXAttributeItem::SpreadAttribute(_)));
+    let mut seen_spread = false;
+    attributes
+        .iter()
+        .map(|item| match item {
+            JSXAttributeItem::SpreadAttribute(_) => {
+                seen_spread = true;
+                SpreadRoute::Spread
+            }
+            JSXAttributeItem::Attribute(attr) => {
+                if !has_spread {
+                    return SpreadRoute::Planned;
+                }
+                let dynamic = matches!(
+                    &attr.value,
+                    Some(JSXAttributeValue::ExpressionContainer(container))
+                        if container.expression.as_expression().is_some_and(|expression| {
+                            classify.is_dynamic(Some(container.span.start), expression, false)
+                        })
+                );
+                if !can_native_spread(attr) || (!seen_spread && !dynamic) {
+                    SpreadRoute::Planned
+                } else {
+                    SpreadRoute::Merged
+                }
+            }
+        })
+        .collect()
+}
+
 impl<'a> AstDomTransform<'a, '_> {
     /// Port of Babel's `processSpreads` (dom/element.ts).
     pub(crate) fn spread_attribute_statement(
@@ -42,11 +106,10 @@ impl<'a> AstDomTransform<'a, '_> {
         let mut prop_objects = std::vec::Vec::new();
         let mut running_props = std::vec::Vec::new();
         let mut dynamic_spread = false;
-        let mut first_spread = false;
-        for attr in attributes {
+        let routes = spread_routes(attributes, &self.classify());
+        for (attr, route) in attributes.iter().zip(routes) {
             match attr {
                 JSXAttributeItem::SpreadAttribute(spread) => {
-                    first_spread = true;
                     if !running_props.is_empty() {
                         prop_objects.push(self.ast().expression_object(
                             spread.span,
@@ -89,21 +152,10 @@ impl<'a> AstDomTransform<'a, '_> {
                     prop_objects.push(value);
                 }
                 JSXAttributeItem::Attribute(attr) => {
-                    if !can_native_spread(attr) {
-                        continue;
-                    }
-                    let dynamic = matches!(
-                        &attr.value,
-                        Some(JSXAttributeValue::ExpressionContainer(container))
-                            if container.expression.as_expression().is_some_and(|expression| {
-                                self.classify().is_dynamic(
-                                    Some(container.span.start),
-                                    expression,
-                                    false,
-                                )
-                            })
-                    );
-                    if !first_spread && !dynamic {
+                    // Refs, compiler namespaces, and the pre-spread carve-out
+                    // are all decided by `spread_routes`; only a `Merged`
+                    // attribute belongs in the props object.
+                    if route != SpreadRoute::Merged {
                         continue;
                     }
                     running_props.push(self.spread_attribute_property(

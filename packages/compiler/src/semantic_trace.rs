@@ -27,8 +27,10 @@ use oxc_ast::ast::{
 use oxc_ast_visit::Visit;
 use oxc_span::{GetSpan, Span};
 
+use crate::dom::spread::{spread_routes, SpreadRoute};
 use crate::shared::attr_plan::static_style_key;
 use crate::shared::bindings::BindingTable;
+use crate::shared::classify::Classify;
 use crate::shared::utils::{dedupe_attributes, is_component_name, is_literal_only_expression};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -164,18 +166,40 @@ pub(crate) struct ExecutionCensus {
 impl ExecutionCensus {
     pub(crate) fn from_program(
         program: &Program<'_>,
+        source: &str,
+        static_marker: &str,
         built_ins: &[String],
         inline_styles: bool,
     ) -> Self {
         let mut bindings = BindingTable::default();
         bindings.scan_builtin_shadowing(program, built_ins);
+        // `Classify` reads only namespace-import locals off the table, so the
+        // module's imports are all the census needs to answer `is_dynamic`
+        // exactly as lowering does.
+        for statement in &program.body {
+            if matches!(statement, oxc_ast::ast::Statement::ImportDeclaration(_)) {
+                bindings.collect(statement);
+            }
+        }
 
         struct CensusVisitor<'a, 'bindings> {
             sites: BTreeSet<SiteKey>,
             ignored_literal_spans: BTreeSet<SourceSpan>,
             built_ins: HashSet<&'a str>,
             bindings: &'bindings BindingTable,
-            parent_component: bool,
+            /// The lowering-side dynamic classifier, so the census reads the
+            /// same `spread_routes` verdict `dom::attrs` and `dom::spread` do.
+            classify: Classify<'bindings>,
+            /// Fragment spans that are a *direct* child of a component
+            /// element (or of a fragment that is one) — the only fragments
+            /// whose children lower as `ComponentChild`.
+            ///
+            /// A span set rather than a "nearest enclosing element is a
+            /// component" flag: the generic walk descends into attribute
+            /// values and nested closures, where a flag would still read
+            /// `true` for a fragment that is no syntactic child of the
+            /// element's child list at all.
+            component_child_fragments: BTreeSet<SourceSpan>,
             inline_styles: bool,
             /// Value spans the compiler discards wholesale. Nothing inside one
             /// is ever lowered, so nothing inside one is a site — including
@@ -296,6 +320,17 @@ impl ExecutionCensus {
                 (!conflicting).then_some(object)
             }
 
+            /// Record the fragments in a component-hosted child list, whose
+            /// own children lower as [`ExecutionSiteKind::ComponentChild`].
+            fn mark_component_child_fragments(&mut self, children: &[JSXChild<'_>]) {
+                for child in children {
+                    if let JSXChild::Fragment(fragment) = child {
+                        self.component_child_fragments
+                            .insert(SourceSpan::from(fragment.span));
+                    }
+                }
+            }
+
             fn census_child(&mut self, child: &JSXChild<'_>, kind: ExecutionSiteKind) {
                 match child {
                     JSXChild::ExpressionContainer(container)
@@ -328,6 +363,30 @@ impl ExecutionCensus {
                     .attributes
                     .iter()
                     .any(|attribute| matches!(attribute, JSXAttributeItem::SpreadAttribute(_)));
+                // Which attributes lowering hands to the ordinary attribute
+                // planner rather than merging into the runtime spread object.
+                // Read from the same authority `dom::attrs` and `dom::spread`
+                // use, so the census cannot decompose a `style`/`classList`
+                // object at a granularity lowering never applies.
+                let planned_attributes: HashSet<Span> = if component {
+                    HashSet::new()
+                } else {
+                    element
+                        .opening_element
+                        .attributes
+                        .iter()
+                        .zip(spread_routes(
+                            &element.opening_element.attributes,
+                            &self.classify,
+                        ))
+                        .filter_map(|(item, route)| match (item, route) {
+                            (JSXAttributeItem::Attribute(attribute), SpreadRoute::Planned) => {
+                                Some(attribute.span)
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                };
                 let control_flow = match &element.opening_element.name {
                     oxc_ast::ast::JSXElementName::IdentifierReference(name) => {
                         self.built_ins.contains(name.name.as_str())
@@ -413,8 +472,7 @@ impl ExecutionCensus {
                             // Solid 1.x splits `classList={{...}}` per property
                             // and `style={{...}}` per declaration; `class` is
                             // never decomposed as an object.
-                            if !component
-                                && !has_spread
+                            if planned_attributes.contains(&attribute.span)
                                 && (name == "classList" || (name == "style" && self.inline_styles))
                             {
                                 if let Some(oxc_ast::ast::Expression::ObjectExpression(object)) =
@@ -473,7 +531,7 @@ impl ExecutionCensus {
                             // `class={["a", {...}]}` keeps the static classes on
                             // the original attribute and moves the trailing
                             // object to a second `class` plan of its own.
-                            if !component && !has_spread && name == "class" {
+                            if planned_attributes.contains(&attribute.span) && name == "class" {
                                 if let Some(expression) = container.expression.as_expression() {
                                     if let Some(object) = Self::split_class_array_object(expression)
                                     {
@@ -547,19 +605,32 @@ impl ExecutionCensus {
                     }
                 }
 
-                let previous = self.parent_component;
-                self.parent_component = component;
+                // Only a fragment in this element's own child list lowers
+                // through `component_children`; the recursive walk below also
+                // enters attribute values and the closures inside them, whose
+                // fragments are plain JSX children of nothing.
+                if component {
+                    self.mark_component_child_fragments(&element.children);
+                }
                 oxc_ast_visit::walk::walk_jsx_element(self, element);
-                self.parent_component = previous;
                 self.dropped_ranges.truncate(dropped_before);
             }
 
             fn visit_jsx_fragment(&mut self, fragment: &JSXFragment<'b>) {
-                let kind = if self.parent_component {
+                let kind = if self
+                    .component_child_fragments
+                    .contains(&SourceSpan::from(fragment.span))
+                {
                     ExecutionSiteKind::ComponentChild
                 } else {
                     ExecutionSiteKind::JsxChild
                 };
+                // `lower_fragment` recurses into a nested fragment with the
+                // same site kind, so a fragment directly inside a component
+                // child fragment is one too.
+                if kind == ExecutionSiteKind::ComponentChild {
+                    self.mark_component_child_fragments(&fragment.children);
+                }
                 for child in &fragment.children {
                     self.census_child(child, kind);
                 }
@@ -572,7 +643,8 @@ impl ExecutionCensus {
             ignored_literal_spans: BTreeSet::new(),
             built_ins: built_ins.iter().map(String::as_str).collect(),
             bindings: &bindings,
-            parent_component: false,
+            classify: Classify::new(&bindings, source, static_marker),
+            component_child_fragments: BTreeSet::new(),
             inline_styles,
             dropped_ranges: Vec::new(),
         };

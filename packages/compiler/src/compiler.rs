@@ -177,6 +177,8 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
             if options.semantic_trace {
                 transform.semantic_trace = TraceRecorder::new(ExecutionCensus::from_program(
                     &program,
+                    source,
+                    &options.static_marker,
                     &options.built_ins,
                     options.inline_styles,
                 ));
