@@ -2,7 +2,7 @@
 // have no host to resolve against.
 #![cfg(not(feature = "node"))]
 
-//! The behavioral changes `babel-plugin-jsx-dom-expressions` made between
+//! The four behavioral changes `babel-plugin-jsx-dom-expressions` made between
 //! 0.40.7 and 0.40.10, pinned on this side of the port.
 //!
 //! The live differential harness (`__tests__/parity.test.js`,
@@ -17,6 +17,15 @@ fn ssr() -> CompileOptions {
     CompileOptions {
         module_name: "r-server".into(),
         generate: Generate::Ssr,
+        built_ins: vec!["For".into(), "Show".into()],
+        static_marker: "@once".into(),
+        ..CompileOptions::default()
+    }
+}
+
+fn dom() -> CompileOptions {
+    CompileOptions {
+        module_name: "r-dom".into(),
         built_ins: vec!["For".into(), "Show".into()],
         static_marker: "@once".into(),
         ..CompileOptions::default()
@@ -91,4 +100,87 @@ var _tmpl$ = ["<div>", "</div>"];
 const a = _$ssr(_tmpl$, `a"b&c<d ${_$escape(x())}`);
 "#
     );
+}
+
+// ---------------------------------------------------------------------------
+// Changes 1 + 2 — `omitServerOnlyTemplates`, default `true`.
+//
+// An opt-out knob, so the default must emit exactly what 0.40.7 emitted.
+// ---------------------------------------------------------------------------
+
+const SERVER_ONLY: &str = "const a = <div $ServerOnly>{x()}</div>;";
+
+#[test]
+fn a_hydratable_server_only_element_skips_its_template_by_default() {
+    let options = CompileOptions {
+        hydratable: true,
+        ..dom()
+    };
+    assert_eq!(
+        emitted(SERVER_ONLY, &options),
+        r#"import { getNextElement as _$getNextElement } from "r-dom";
+import { insert as _$insert } from "r-dom";
+var _el$ = _$getNextElement();
+_$insert(_el$, x);
+const a = _el$;
+"#
+    );
+    // The default is the pre-0.40.10 behavior, spelled out.
+    assert_eq!(
+        emitted(SERVER_ONLY, &options),
+        emitted(
+            SERVER_ONLY,
+            &CompileOptions {
+                omit_server_only_templates: true,
+                ..options.clone()
+            }
+        )
+    );
+}
+
+#[test]
+fn opting_out_keeps_the_template_and_still_drops_the_attribute() {
+    let options = CompileOptions {
+        hydratable: true,
+        omit_server_only_templates: false,
+        ..dom()
+    };
+    let code = emitted(SERVER_ONLY, &options);
+    assert_eq!(
+        code,
+        r#"import { template as _$template } from "r-dom";
+import { getNextElement as _$getNextElement } from "r-dom";
+import { insert as _$insert } from "r-dom";
+var _tmpl$ = /* @__PURE__ */ _$template(`<div>`);
+var _el$ = _$getNextElement(_tmpl$);
+_$insert(_el$, x);
+const a = _el$;
+"#
+    );
+    // Only the `skipTemplate` assignment moved inside the new conditional;
+    // the `return` that drops the attribute from the markup did not.
+    assert!(!code.contains("$ServerOnly"), "{code}");
+}
+
+#[test]
+fn opting_out_does_not_revive_document_shell_templates() {
+    // `html`/`head`/`body` have their own unconditional `skipTemplate` in
+    // `dom/element.js`, untouched by 0.40.10.
+    let options = CompileOptions {
+        hydratable: true,
+        omit_server_only_templates: false,
+        ..dom()
+    };
+    let code = emitted("const a = <body>{x()}</body>;", &options);
+    assert!(!code.contains("_$template"), "{code}");
+}
+
+#[test]
+fn the_knob_is_inert_outside_hydratable_compilation() {
+    let on = CompileOptions { ..dom() };
+    let off = CompileOptions {
+        omit_server_only_templates: false,
+        ..dom()
+    };
+    assert_eq!(emitted(SERVER_ONLY, &on), emitted(SERVER_ONLY, &off));
 }

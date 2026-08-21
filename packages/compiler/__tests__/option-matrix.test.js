@@ -32,6 +32,7 @@ const variants = {
     contextToCustomElements: !mode.options.contextToCustomElements
   }),
   "inlineStyles:false": { inlineStyles: false },
+  "omitServerOnlyTemplates:false": { omitServerOnlyTemplates: false },
   "dev:true": { dev: true },
   "validate:false": { validate: false }
 };

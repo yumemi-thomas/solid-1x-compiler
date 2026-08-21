@@ -233,6 +233,7 @@ const nativeOptionKeys = new Set([
   "dev",
   "sourceMap",
   "contextToCustomElements",
+  "omitServerOnlyTemplates",
   "delegateEvents",
   "delegatedEvents",
   "omitQuotes",

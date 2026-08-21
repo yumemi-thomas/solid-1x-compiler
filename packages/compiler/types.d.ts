@@ -6,6 +6,12 @@ export interface TransformOptions {
   dev?: boolean;
   sourceMap?: boolean;
   contextToCustomElements?: boolean;
+  /**
+   * Whether a hydratable `$ServerOnly` element skips its client template
+   * entirely (default `true`). `false` keeps the template; the attribute is
+   * dropped from the markup either way.
+   */
+  omitServerOnlyTemplates?: boolean;
   delegateEvents?: boolean;
   delegatedEvents?: string[];
   omitQuotes?: boolean;

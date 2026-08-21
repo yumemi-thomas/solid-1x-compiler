@@ -141,6 +141,7 @@ Supported options track the Babel plugin where currently implemented:
 - `dev`
 - `sourceMap`
 - `contextToCustomElements`
+- `omitServerOnlyTemplates`
 - `delegateEvents`
 - `delegatedEvents`
 - `omitQuotes`

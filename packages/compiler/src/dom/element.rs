@@ -18,6 +18,7 @@ pub(crate) struct AstDomTransform<'a, 'source> {
     pub(crate) hydratable: bool,
     pub(crate) dev: bool,
     pub(crate) context_to_custom_elements: bool,
+    pub(crate) omit_server_only_templates: bool,
     pub(crate) delegate_events: bool,
     pub(crate) delegated_events: std::vec::Vec<String>,
     pub(crate) omit_quotes: bool,
@@ -90,6 +91,7 @@ pub(crate) struct DomTransformConfig {
     pub(crate) hydratable: bool,
     pub(crate) dev: bool,
     pub(crate) context_to_custom_elements: bool,
+    pub(crate) omit_server_only_templates: bool,
     pub(crate) delegate_events: bool,
     pub(crate) delegated_events: std::vec::Vec<String>,
     pub(crate) omit_quotes: bool,
@@ -131,6 +133,7 @@ impl<'a, 'source> AstDomTransform<'a, 'source> {
             hydratable: config.hydratable,
             dev: config.dev,
             context_to_custom_elements: config.context_to_custom_elements,
+            omit_server_only_templates: config.omit_server_only_templates,
             delegate_events: config.delegate_events,
             delegated_events: config.delegated_events,
             omit_quotes: config.omit_quotes,
@@ -418,9 +421,11 @@ impl<'a, 'source> AstDomTransform<'a, 'source> {
         };
         // Babel's `skipTemplate`: `$ServerOnly` elements and document shells
         // (`html`/`head`/`body`) never render client-side markup — the element
-        // is only recovered from the hydration walk.
+        // is only recovered from the hydration walk. `omitServerOnlyTemplates`
+        // opts out of the `$ServerOnly` half only; the document shells keep
+        // their own unconditional `skipTemplate` in `dom/element.js`.
         let skip_template = self.hydratable
-            && (has_attribute_named(element, "$ServerOnly")
+            && ((self.omit_server_only_templates && has_attribute_named(element, "$ServerOnly"))
                 || matches!(tag_name.as_str(), "html" | "head" | "body"));
         let template_id = if skip_template {
             None

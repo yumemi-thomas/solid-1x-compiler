@@ -20,6 +20,10 @@ pub struct TransformOptions {
     pub dev: Option<bool>,
     pub source_map: Option<bool>,
     pub context_to_custom_elements: Option<bool>,
+    /// Babel's `omitServerOnlyTemplates` (default `true`): whether a
+    /// hydratable `$ServerOnly` element skips its client template entirely.
+    /// `false` keeps the template while still dropping the attribute.
+    pub omit_server_only_templates: Option<bool>,
     pub delegate_events: Option<bool>,
     pub delegated_events: Option<Vec<String>>,
     pub omit_quotes: Option<bool>,

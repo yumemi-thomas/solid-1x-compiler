@@ -100,6 +100,7 @@ fn core_options(options: TransformOptions) -> Result<CompileOptions> {
         hydratable: options.hydratable.unwrap_or(false),
         source_map: options.source_map.unwrap_or(false),
         context_to_custom_elements: options.context_to_custom_elements.unwrap_or(false),
+        omit_server_only_templates: options.omit_server_only_templates.unwrap_or(true),
         delegate_events: options.delegate_events.unwrap_or(true),
         delegated_events: options.delegated_events.unwrap_or_default(),
         omit_quotes: options.omit_quotes.unwrap_or(true),

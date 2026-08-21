@@ -61,6 +61,10 @@ pub struct CompileOptions {
     pub hydratable: bool,
     pub source_map: bool,
     pub context_to_custom_elements: bool,
+    /// Babel's `omitServerOnlyTemplates` (default `true`): whether a
+    /// hydratable `$ServerOnly` element skips its client template. The
+    /// attribute is dropped from the markup either way.
+    pub omit_server_only_templates: bool,
     pub delegate_events: bool,
     pub delegated_events: Vec<String>,
     pub omit_quotes: bool,
@@ -90,6 +94,7 @@ impl Default for CompileOptions {
             hydratable: false,
             source_map: false,
             context_to_custom_elements: false,
+            omit_server_only_templates: true,
             delegate_events: true,
             delegated_events: Vec::new(),
             omit_quotes: true,
@@ -336,6 +341,7 @@ fn dom_transform_config(options: &CompileOptions, built_ins: Vec<String>) -> Dom
         // must not be enabled when matching the 1.x Babel compiler.
         dev: false,
         context_to_custom_elements: options.context_to_custom_elements,
+        omit_server_only_templates: options.omit_server_only_templates,
         delegate_events: options.delegate_events,
         delegated_events: options.delegated_events.clone(),
         omit_quotes: options.omit_quotes,
@@ -369,6 +375,7 @@ fn dynamic_dom_config<'source>(
         hydratable: dom.hydratable,
         dev: dom.dev,
         context_to_custom_elements: dom.context_to_custom_elements,
+        omit_server_only_templates: dom.omit_server_only_templates,
         delegate_events: dom.delegate_events,
         delegated_events: dom.delegated_events,
         omit_quotes: dom.omit_quotes,
