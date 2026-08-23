@@ -175,7 +175,8 @@ impl<'a> AstDomTransform<'a, '_> {
                         let mut discarded_declarations = std::vec::Vec::new();
                         let mut discarded_operations = std::vec::Vec::new();
                         let mut discarded_dynamics = std::vec::Vec::new();
-                        self.lower_dynamic_native_child(
+                        self.semantic_trace.suppress();
+                        let discarded = self.lower_dynamic_native_child(
                             child,
                             CloseTagContext {
                                 last_element: Some(index) == last_element,
@@ -188,7 +189,9 @@ impl<'a> AstDomTransform<'a, '_> {
                             &mut discarded_declarations,
                             &mut discarded_operations,
                             &mut discarded_dynamics,
-                        )?;
+                        );
+                        self.semantic_trace.resume();
+                        discarded?;
                         index += 1;
                         continue;
                     }
@@ -216,6 +219,8 @@ impl<'a> AstDomTransform<'a, '_> {
                             template,
                             declarations,
                         );
+                        self.semantic_trace
+                            .owner_establishment(child.span, "insert", None);
                         operations.push(self.insert_statement(
                             element.span,
                             element_id,
@@ -377,7 +382,11 @@ impl<'a> AstDomTransform<'a, '_> {
                         let value =
                             jsx_expression_to_expression(&container.expression, self.allocator);
                         let value = if dynamic {
-                            self.dom_child_expression(container.span, value)
+                            self.dom_child_expression(
+                                container.span,
+                                container.expression.span(),
+                                value,
+                            )
                         } else {
                             value
                         };
@@ -399,6 +408,11 @@ impl<'a> AstDomTransform<'a, '_> {
                                 declarations,
                             )
                         };
+                        self.semantic_trace.owner_establishment(
+                            container.expression.span(),
+                            "insert",
+                            None,
+                        );
                         operations.push(self.insert_statement(
                             element.span,
                             element_id,
@@ -433,6 +447,11 @@ impl<'a> AstDomTransform<'a, '_> {
                         &mut child_node_index,
                         template,
                         declarations,
+                    );
+                    self.semantic_trace.owner_establishment(
+                        spread.expression.span(),
+                        "insert",
+                        None,
                     );
                     operations.push(self.insert_statement(element.span, element_id, value, marker));
                 }

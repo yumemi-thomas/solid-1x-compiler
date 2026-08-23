@@ -82,6 +82,10 @@ fn returns_a_typed_execution_trace_without_node_types() {
     .expect("compile with tracing");
 
     let trace = output.semantic_trace.expect("tracing was requested");
+    assert_eq!(
+        trace.version,
+        dom_expressions_compiler::SEMANTIC_TRACE_VERSION
+    );
     let decisions = trace
         .sites
         .iter()
@@ -132,9 +136,29 @@ fn the_trace_round_trips_through_serde() {
     .expect("tracing was requested");
 
     let json = serde_json::to_string(&trace).expect("serialize");
+    assert!(json.contains("\"version\":2"));
     assert!(json.contains("jsx-child"));
     assert!(json.contains("later-event"));
     let parsed: dom_expressions_compiler::SemanticTrace =
         serde_json::from_str(&json).expect("deserialize");
     assert_eq!(parsed, trace);
+}
+
+#[test]
+fn the_replaced_ownership_trace_field_is_not_silently_accepted() {
+    let legacy = r#"{"sites":[],"ownership_sites":[]}"#;
+    assert!(serde_json::from_str::<dom_expressions_compiler::SemanticTrace>(legacy).is_err());
+
+    let nested_unknown = r#"{
+        "version": 2,
+        "sites": [{
+            "span": {"start": 0, "end": 1},
+            "kind": "jsx-child",
+            "decision": {"value": "eager-once"},
+            "extra": true
+        }]
+    }"#;
+    assert!(
+        serde_json::from_str::<dom_expressions_compiler::SemanticTrace>(nested_unknown).is_err()
+    );
 }

@@ -356,7 +356,11 @@ impl<'a> AstDomTransform<'a, '_> {
         needs_placeholder: &mut bool,
     ) -> Result<()> {
         let span = plan.span;
-        let semantic_spans = plan.semantic_spans.clone();
+        let semantic_spans = if self.semantic_trace.is_recording() {
+            plan.semantic_spans.clone()
+        } else {
+            Vec::new()
+        };
         let raw = match plan.value {
             PlanValue::Expr(expression) => expression,
             PlanValue::Literal(value) => {
@@ -413,6 +417,8 @@ impl<'a> AstDomTransform<'a, '_> {
                     crate::semantic_trace::ExecutionSiteKind::Ref,
                     crate::semantic_trace::CallbackDecision::RefApply,
                 );
+                self.semantic_trace
+                    .owner_establishment(*span, "ref-apply", None);
             }
             front_groups.push(self.dom_ref_statements(span, element_id, raw));
             return Ok(());
@@ -451,6 +457,8 @@ impl<'a> AstDomTransform<'a, '_> {
                     crate::semantic_trace::ExecutionSiteKind::EventHandler,
                     crate::semantic_trace::CallbackDecision::LaterEvent,
                 );
+                self.semantic_trace
+                    .owner_establishment(*span, "direct", None);
             }
             let call = self.call_identifier(
                 span,
@@ -473,6 +481,8 @@ impl<'a> AstDomTransform<'a, '_> {
                     crate::semantic_trace::ExecutionSiteKind::EventHandler,
                     crate::semantic_trace::CallbackDecision::LaterEvent,
                 );
+                self.semantic_trace
+                    .owner_establishment(*span, "capture", None);
             }
             let callee = self.static_member_expression(span, element_id, "addEventListener");
             let call = self.call_expression(
@@ -546,6 +556,7 @@ impl<'a> AstDomTransform<'a, '_> {
             };
             dynamics.push(DynamicSlot {
                 span,
+                trace_spans: self.semantic_trace.is_recording().then_some(semantic_spans),
                 elem,
                 key: plan.key,
                 value,

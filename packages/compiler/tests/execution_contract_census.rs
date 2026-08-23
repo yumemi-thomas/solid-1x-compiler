@@ -239,4 +239,19 @@ fn tracing_does_not_change_generated_output() {
         assert!(plain.semantic_trace.is_none());
         assert!(traced.semantic_trace.is_some());
     }
+
+    for (name, source) in probe_sources() {
+        let untraced = CompileOptions {
+            semantic_trace: false,
+            ..options(built_ins())
+        };
+        let Ok(plain) = compile(&source, &untraced) else {
+            continue;
+        };
+        let traced = compile(&source, &options(built_ins()))
+            .unwrap_or_else(|error| panic!("{name}: tracing failed: {error}"));
+        assert_eq!(plain.code, traced.code, "output changed for probe {name}");
+        assert!(plain.semantic_trace.is_none());
+        assert!(traced.semantic_trace.is_some());
+    }
 }

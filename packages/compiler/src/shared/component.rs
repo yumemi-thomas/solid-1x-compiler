@@ -52,6 +52,7 @@ pub(crate) fn lower_component_with_setup<'a, C: ComponentLower<'a>>(
     let allocator = ctx.condition_allocator();
     let ast = mode_ast(ctx);
     ctx.mark_create_component();
+    ctx.trace_wrapper(element.span, "createComponent", None);
     // Function children of an unshadowed control-flow built-in are render
     // callbacks, not values.
     let render_callbacks = match &element.opening_element.name {
@@ -167,7 +168,9 @@ pub(crate) fn lower_component_with_setup<'a, C: ComponentLower<'a>>(
             }
         };
         if name == "ref" {
+            let value_span = value.span();
             if let Some(ref_property) = ctx.component_ref_prop(attr.span, value, &mut setup) {
+                ctx.trace_wrapper(value_span, "ref-apply", None);
                 running_props.push(ref_property);
             }
         } else if needs_getter && !condition_inlined {

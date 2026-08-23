@@ -61,6 +61,17 @@ pub(crate) trait ModeLower<'a>: ConditionBuilder<'a> {
     /// with `_$escape` first.
     fn memo_wrap_dynamic_child(&mut self, span: Span, thunk: Expression<'a>) -> Expression<'a>;
 
+    /// Variant retaining the emitted AST span while giving semantic tracing
+    /// the exact source expression span. Non-DOM generates do not trace.
+    fn memo_wrap_dynamic_child_with_trace(
+        &mut self,
+        span: Span,
+        _trace_span: Span,
+        thunk: Expression<'a>,
+    ) -> Expression<'a> {
+        self.memo_wrap_dynamic_child(span, thunk)
+    }
+
     /// Span stamped on a multi-child fragment array (the dom generate keeps
     /// the first child's span; ssr and universal use the fragment's own).
     fn fragment_array_span(&self, fragment: &JSXFragment<'a>) -> Span {

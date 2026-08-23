@@ -9,9 +9,14 @@
   `CompileOutput::semantic_trace` carries a `SemanticTrace` collected by the
   same pass that produced `code`, so a consumer that wants both no longer
   parses and lowers the source twice. `SemanticTrace`, `ExecutionSite`,
-  `ExecutionSiteKind`, `ValueDecision`, `CallbackDecision`, `TerminalDecision`
-  and `SourceSpan` are exported from the crate root and derive
-  `Serialize`/`Deserialize`.
+  `ExecutionSiteKind`, `ValueDecision`, `CallbackDecision`, `TerminalDecision`,
+  `OwnerEstablishment`, `ComponentRenderSite`, `DeferredCallbackSite` and
+  `SourceSpan` are exported from the crate root and derive
+  `Serialize`/`Deserialize`. The former `OwnershipDecision`, `OwnershipSite`
+  and `ownership_sites` vocabulary is intentionally removed; consumers must
+  migrate to emitted wrapper identities and spans. The typed trace is schema
+  version 2 (`SEMANTIC_TRACE_VERSION`), and strict deserialization rejects
+  unknown fields.
 
   `analyze_execution_contract` and `src/facts.rs` are removed with the JSON
   contract they produced (`wireVersion`, `scope`, `coverage`, `provenance`,
@@ -22,10 +27,13 @@
   dependency list (`serde_json` stays as a dev-dependency for a round-trip
   test).
 
-  The recorder and its reconciliation are unchanged: the census still
-  enumerates sites independently, lowering still records each decision where it
-  makes it, and `finish()` still fails the compile on an unresolved,
-  conflicting, or uncensused site.
+  The execution-site recorder and reconciliation remain fail-closed: the
+  census still enumerates sites independently, lowering still records each
+  decision where it makes it, and `finish()` still fails the compile on an
+  unresolved, conflicting, or uncensused site. The wrapper, render, and
+  receiver facts are additive within that versioned schema, are recorded at
+  their lowering emission sites, and do not alter generated output. They are
+  produced only for DOM lowering.
 
 - The compiler core no longer depends on Node-API. A new `src/compiler.rs`
   holds the reusable interface — `compile`, `analyze_execution_contract`, and

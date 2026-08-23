@@ -4,8 +4,8 @@ Setting `CompileOptions::semantic_trace` makes `compile` report how the
 compiler will execute the original-source JSX it was handed, alongside the code
 it generated for it. The report is typed Rust data, not a wire format: a
 consumer that needs to move it across a process boundary defines its own
-envelope and version, because that is a transport concern rather than a
-compiler one.
+envelope, while checking the producer's `SEMANTIC_TRACE_VERSION` before
+accepting the strict schema.
 
 ## Totality, not sampling
 
@@ -54,7 +54,7 @@ transports a trace is responsible for carrying whatever it needs to re-establish
 that — a source hash, an options hash, a protocol version — and for rejecting a
 mismatch.
 
-Only DOM generation produces a trace; every other generate returns a
+Only DOM generation produces a trace and these lowering facts; every other generate returns a
 configuration error rather than a partial answer, as does a source skipped by
 `requireImportSource` (there is no lowering to report on).
 
@@ -84,6 +84,49 @@ Callback positions decide between `later-event` (`event-handler`),
 Expressions with no observable execution are not sites at all: literal-only
 leaves have nothing to report, and neither does anything nested inside a value
 the compiler discards wholesale.
+
+## Lowering wrapper facts
+
+`owner_establishments` records the wrapper identity and source span at the
+lowering site that emitted it. The span rule is uniform: it is the exact
+source span of the expression or JSX node whose lowering is being wrapped —
+never the JSX expression container including braces, the whole attribute, or
+the parent element. When the construct has an `ExecutionSite`, the spans are
+equality-joinable; JSX-node facts join to `ComponentRenderSite` or
+`DeferredCallbackSite` spans. It is additive evidence about compiler output,
+not a runtime ownership, ancestry, timing, or render-occurrence claim.
+
+Facts are additive within schema version 2, but the schema is intentionally
+strict: `SemanticTrace` rejects unknown fields and consumers must reject an
+unsupported `version`. The identity is deliberately preserved as a string so
+a custom or unaudited wrapper remains representable; the consumer maps it
+through its audited dialect and treats an unknown identity as unknown. An
+optional `group_id` links the bindings emitted into one keyed effect wrapper
+invocation.
+
+The current DOM lowering records these facts for effect, memo,
+`createComponent`, insert, delegated, direct, capture, and ref-apply wrappers.
+Event identities describe auditable semantics: `delegated`, `direct`, and
+`capture`; they do not expose which helper or builder happened to emit the
+listener. It also records `component_render_sites`, which are spans where JSX
+component renders are emitted. This fact is deliberately kept as an explicit
+consumer seam even though it is currently one-to-one and span-identical with
+`createComponent` establishments. Neither fact replaces the consumer's
+dialect or runtime model; the consumer should use the spans and identities
+directly rather than reconstructing them from JSX AST or inferred ownership
+rules.
+
+`deferred_callback_sites` pairs a deferred component prop, ref, spread, or
+control-flow child callback span with the enclosing JSX component span that
+receives it. It is a source relationship only; the consumer should use it to
+attach the callback to the receiver span, without inferring callback timing or
+runtime receiver semantics.
+
+This is an intentional trace-contract replacement for the former
+`ownership_sites` / `OwnershipDecision` vocabulary. A consumer upgrading to
+this producer must migrate its mapping and version check before moving the
+compiler pin; old serialized traces are rejected rather than silently treated
+as having no wrapper facts.
 
 `packages/compiler/src/shared/classify.rs` is the single classification
 authority. Only lowering consults it for decisions; the census uses it solely

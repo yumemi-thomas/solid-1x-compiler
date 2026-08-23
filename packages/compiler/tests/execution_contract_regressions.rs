@@ -25,8 +25,8 @@
 //! break.
 
 use dom_expressions_compiler::{
-    compile, CallbackDecision, CompileOptions, ExecutionSiteKind, OwnershipDecision, SemanticTrace,
-    TerminalDecision, ValueDecision, Wrapper,
+    compile, CallbackDecision, CompileOptions, ExecutionSiteKind, SemanticTrace, TerminalDecision,
+    ValueDecision, Wrapper,
 };
 
 fn options(semantic_trace: bool) -> CompileOptions {
@@ -406,6 +406,16 @@ fn a_builtin_function_child_is_authoritatively_a_control_flow_render() {
 }
 
 #[test]
+fn a_builtin_function_expression_child_is_also_a_control_flow_render() {
+    let source = r#"const C = () => <Show>{function () { return value(); }}</Show>;"#;
+    assert!(sites_with_built_ins(source, vec!["Show"]).contains(&(
+        "function () { return value(); }",
+        ExecutionSiteKind::ControlFlowRender,
+        TerminalDecision::Callback(CallbackDecision::LaterRender),
+    )));
+}
+
+#[test]
 fn an_unconfigured_or_shadowed_builtin_stays_a_component_child() {
     let unconfigured = r#"const C = () => <Show>{() => value()}</Show>;"#;
     assert_eq!(
@@ -484,56 +494,277 @@ const C = (props) => _$createComponent(_$Show, {
 }
 
 // ---------------------------------------------------------------------------
-// Composition with the ownership trace.
+// Composition with the owner-establishment trace.
 //
-// `finish()` derives `ownership_sites` from the reconciled execution sites, so
-// a census that fails the file yields no ownership evidence at all — which is
-// exactly what both shapes above used to do. These pin the composition: the
-// fixes are what make ownership reachable for them, and they leave the
-// `effect_wrapper` gate that decides whether an owner can be claimed alone.
+// Owner facts are recorded by the lowering wrappers themselves. They do not
+// claim what the runtime wrapper means; the consumer maps the identity through
+// its audited dialect.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn the_callback_fragment_shape_now_yields_an_owned_region() {
+fn the_callback_fragment_shape_records_the_memo_wrapper_at_its_span() {
     let trace = trace(FRAGMENT_IN_A_PROP_CALLBACK);
-    let owned = trace
-        .ownership_sites
-        .iter()
-        .map(|site| {
-            (
-                &FRAGMENT_IN_A_PROP_CALLBACK[site.span.start as usize..site.span.end as usize],
-                site.decision,
-            )
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        owned,
-        [(
-            "props.errorState?.({ error: err, reload })",
-            OwnershipDecision::Owned,
-        )]
-    );
+    assert!(trace.owner_establishments.iter().any(|site| {
+        site.wrapper == "memo"
+            && &FRAGMENT_IN_A_PROP_CALLBACK[site.span.start as usize..site.span.end as usize]
+                == "props.errorState?.({ error: err, reload })"
+    }));
 }
 
 #[test]
-fn a_custom_effect_wrapper_still_makes_no_owner_claim() {
+fn component_child_condition_memo_uses_the_expression_span() {
+    let source = "const C = () => <Show>{value() ? left() : right()}</Show>;";
+    let rendered = trace(source);
+    let memos = rendered
+        .owner_establishments
+        .iter()
+        .filter(|site| site.wrapper == "memo")
+        .map(|site| &source[site.span.start as usize..site.span.end as usize])
+        .collect::<Vec<_>>();
+    assert_eq!(memos, ["value() ? left() : right()"]);
+}
+
+#[test]
+fn native_condition_memos_use_the_expression_span() {
+    for source in [
+        "const C = () => <div>{value() ? left() : right()}</div>;",
+        "const C = () => <div {...props} title={other() ? yes() : no()} />;",
+    ] {
+        let trace = trace(source);
+        let memos = trace
+            .owner_establishments
+            .iter()
+            .filter(|site| site.wrapper == "memo")
+            .map(|site| &source[site.span.start as usize..site.span.end as usize])
+            .collect::<Vec<_>>();
+        let expected = if source.contains("other()") {
+            ["other() ? yes() : no()"]
+        } else {
+            ["value() ? left() : right()"]
+        };
+        assert_eq!(memos, expected);
+    }
+}
+
+#[test]
+fn a_custom_effect_wrapper_keeps_its_identity_for_the_consumer() {
+    let source = "const C = (props) => <div title={props.value} />;";
     let options = CompileOptions {
         effect_wrapper: Wrapper::Name("createRenderEffect".into()),
         ..options(true)
     };
-    let trace = compile(FRAGMENT_IN_A_PROP_CALLBACK, &options)
+    let trace = compile(source, &options)
         .expect("compiles")
         .semantic_trace
         .expect("tracing was requested");
-    assert!(!trace.sites.is_empty());
-    assert!(trace.ownership_sites.is_empty());
+    assert!(trace.owner_establishments.iter().any(|site| {
+        site.wrapper == "createRenderEffect"
+            && &source[site.span.start as usize..site.span.end as usize] == "props.value"
+    }));
 }
 
 #[test]
 fn the_style_shape_reconciles_without_inventing_an_owner() {
-    // Every site here is `Elided` or `CallerContext`; none is a
-    // `ReactiveRerun`, so no owner is proven and none is reported.
+    // This shape emits no compiler wrapper around its four reported values.
     let trace = trace(STYLE_BEFORE_SPREAD);
     assert_eq!(trace.sites.len(), 4);
-    assert!(trace.ownership_sites.is_empty());
+    assert!(trace.owner_establishments.is_empty());
+}
+
+#[test]
+fn owner_establishments_cover_the_dom_emission_sites() {
+    let source = r#"const C = (props) => <Show when={props.when}>
+  <div
+    title={props.title}
+    id={props.id}
+    onClick={props.onClick}
+    ref={props.ref}
+  >{props.child}</div>
+</Show>;"#;
+    let trace = trace(source);
+    let facts = trace
+        .owner_establishments
+        .iter()
+        .map(|site| {
+            (
+                site.wrapper.as_str(),
+                &source[site.span.start as usize..site.span.end as usize],
+            )
+        })
+        .collect::<Vec<_>>();
+    for expected in [
+        (
+            "createComponent",
+            "<Show when={props.when}>\n  <div\n    title={props.title}\n    id={props.id}\n    onClick={props.onClick}\n    ref={props.ref}\n  >{props.child}</div>\n</Show>",
+        ),
+        ("effect", "props.title"),
+        ("effect", "props.id"),
+        ("insert", "props.child"),
+        ("delegated", "props.onClick"),
+        ("ref-apply", "props.ref"),
+    ] {
+        assert!(facts.contains(&expected), "missing exact owner fact {expected:?}");
+    }
+}
+
+#[test]
+fn dynamic_bindings_in_one_template_share_an_effect_group() {
+    let source = r#"const C = (props) => <div title={props.title} id={props.id} />;"#;
+    let rendered = trace(source);
+    let effects = rendered
+        .owner_establishments
+        .iter()
+        .filter(|site| site.wrapper == "effect")
+        .map(|site| {
+            (
+                &source[site.span.start as usize..site.span.end as usize],
+                site.group_id,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(effects, [("props.title", Some(0)), ("props.id", Some(0))]);
+
+    let single = trace("const C = (props) => <div title={props.title} />;");
+    let single_effect = single
+        .owner_establishments
+        .iter()
+        .find(|site| site.wrapper == "effect")
+        .expect("single dynamic binding has an effect fact");
+    assert_eq!(single_effect.group_id, None);
+}
+
+#[test]
+fn insert_facts_use_each_child_expression_span_once() {
+    let source = "const C = (props) => <div>{props.a()}{props.b()}<Foo /></div>;";
+    let rendered = trace(source);
+    let inserts = rendered
+        .owner_establishments
+        .iter()
+        .filter(|site| site.wrapper == "insert")
+        .map(|site| &source[site.span.start as usize..site.span.end as usize])
+        .collect::<Vec<_>>();
+    assert_eq!(inserts, ["props.a()", "props.b()", "<Foo />"]);
+}
+
+#[test]
+fn separate_keyed_effects_receive_distinct_group_ids() {
+    let source = r#"const A = (props) => <div title={props.a} id={props.b} />; const B = (props) => <span title={props.c} id={props.d} />;"#;
+    let rendered = trace(source);
+    let effects = rendered
+        .owner_establishments
+        .iter()
+        .filter(|site| site.wrapper == "effect")
+        .map(|site| {
+            (
+                &source[site.span.start as usize..site.span.end as usize],
+                site.group_id,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(effects.len(), 4);
+    assert_eq!(effects[0].0, "props.a");
+    assert_eq!(effects[1].0, "props.b");
+    assert_eq!(effects[2].0, "props.c");
+    assert_eq!(effects[3].0, "props.d");
+    assert_ne!(effects[0].1, effects[2].1);
+    assert_eq!(effects[0].1, effects[1].1);
+    assert_eq!(effects[2].1, effects[3].1);
+}
+
+#[test]
+fn discarded_nested_head_lowering_emits_no_trace_facts() {
+    let source = r#"const C = () => <div><head><span title={hidden()}>{hiddenChild()}</span></head><p>{shown()}</p></div>;"#;
+    let rendered = trace(source);
+    let owner_spans = rendered
+        .owner_establishments
+        .iter()
+        .map(|site| &source[site.span.start as usize..site.span.end as usize])
+        .collect::<Vec<_>>();
+    assert!(!owner_spans.iter().any(|span| span.contains("hidden")));
+    assert!(owner_spans.contains(&"shown()"));
+}
+
+#[test]
+fn custom_memo_and_disabled_wrappers_are_reported_without_inference() {
+    let custom = compile(
+        FRAGMENT_IN_A_PROP_CALLBACK,
+        &CompileOptions {
+            memo_wrapper: Wrapper::Name("memoize".into()),
+            ..options(true)
+        },
+    )
+    .expect("compiles")
+    .semantic_trace
+    .expect("tracing was requested");
+    assert!(custom
+        .owner_establishments
+        .iter()
+        .any(|site| site.wrapper == "memoize"));
+
+    let disabled = compile(
+        FRAGMENT_IN_A_PROP_CALLBACK,
+        &CompileOptions {
+            effect_wrapper: Wrapper::Disabled,
+            memo_wrapper: Wrapper::Disabled,
+            ..options(true)
+        },
+    )
+    .expect("compiles")
+    .semantic_trace
+    .expect("tracing was requested");
+    assert!(disabled
+        .owner_establishments
+        .iter()
+        .all(|site| site.wrapper != "effect" && site.wrapper != "memo"));
+}
+
+#[test]
+fn delegated_event_bindings_record_their_emission_span() {
+    let source = "const handler = () => act(); const C = () => <button onClick={handler} />;";
+    let trace = trace(source);
+    assert!(trace.owner_establishments.iter().any(|site| {
+        site.wrapper == "delegated"
+            && &source[site.span.start as usize..site.span.end as usize] == "handler"
+    }));
+}
+
+#[test]
+fn event_facts_partition_delegated_direct_and_capture_semantics() {
+    let source = r#"const handler = () => act(); const C = () => <div onClick={handler} on:focus={handler} oncapture:blur={handler} />;"#;
+    let rendered = trace(source);
+    let facts = rendered
+        .owner_establishments
+        .iter()
+        .filter(|site| matches!(site.wrapper.as_str(), "delegated" | "direct" | "capture"))
+        .map(|site| {
+            (
+                site.wrapper.as_str(),
+                &source[site.span.start as usize..site.span.end as usize],
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        facts,
+        [
+            ("delegated", "handler"),
+            ("direct", "handler"),
+            ("capture", "handler")
+        ]
+    );
+
+    let direct_options = CompileOptions {
+        delegate_events: false,
+        ..options(true)
+    };
+    let direct = compile(
+        "const C = () => <button onClick={handler} />;",
+        &direct_options,
+    )
+    .expect("compiles")
+    .semantic_trace
+    .expect("tracing was requested");
+    assert!(direct
+        .owner_establishments
+        .iter()
+        .any(|site| site.wrapper == "direct"));
 }

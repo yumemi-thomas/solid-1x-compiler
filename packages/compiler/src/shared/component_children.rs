@@ -11,7 +11,7 @@ use oxc_span::GetSpan;
 
 use crate::shared::array::expression_to_array_element;
 use crate::shared::ast::arrow_return_expression;
-use crate::shared::condition::{is_condition_shape, transform_condition_inline};
+use crate::shared::condition::{is_condition_shape, transform_condition_inline_with_trace};
 use crate::shared::fragment::lower_fragment;
 use crate::shared::mode_lower::{mode_ast, ModeLower};
 use crate::shared::utils::{decode_html_entities, trim_jsx_text};
@@ -112,7 +112,12 @@ pub(crate) fn component_children<'a, C: ComponentChildLower<'a>>(
                 let mut value = container.expression.clone_in(allocator).into_expression();
                 if dynamic && ctx.wrap_conditionals_enabled() && is_condition_shape(&value) {
                     // `transformCondition(..., true)` — memos collapse inline.
-                    value = transform_condition_inline(ctx, container.span, value);
+                    value = transform_condition_inline_with_trace(
+                        ctx,
+                        container.span,
+                        container.expression.span(),
+                        value,
+                    );
                 }
                 values.push(ChildValue {
                     value,
@@ -213,6 +218,7 @@ pub(crate) fn component_children<'a, C: ComponentChildLower<'a>>(
                 .into_iter()
                 .map(|child| {
                     let span = child.value.span();
+                    let trace_span = child.semantic_span.unwrap_or(span);
                     // Element children keep their setup in a per-entry IIFE;
                     // dynamic expression children are memo-wrapped
                     // (`createTemplate(wrap: true)` with an arrow thunk —
@@ -225,7 +231,7 @@ pub(crate) fn component_children<'a, C: ComponentChildLower<'a>>(
                         ast.expression_call(span, iife, NONE, ast.vec(), false)
                     } else if matches!(child.kind, ChildKind::DynamicExpression) {
                         let thunk = arrow_return_expression(allocator, span, child.value);
-                        ctx.memo_wrap_dynamic_child(span, thunk)
+                        ctx.memo_wrap_dynamic_child_with_trace(span, trace_span, thunk)
                     } else {
                         child.value
                     };

@@ -27,6 +27,11 @@ use oxc_ast::ast::{
 use oxc_ast_visit::Visit;
 use oxc_span::{GetSpan, Span};
 
+/// Version of the typed semantic-trace schema. The trace is intentionally
+/// strict (`SemanticTrace` rejects unknown fields), so consumers must check
+/// this value before decoding or caching the facts.
+pub const SEMANTIC_TRACE_VERSION: u32 = 2;
+
 use crate::dom::spread::{spread_routes, SpreadRoute};
 use crate::shared::attr_plan::static_style_key;
 use crate::shared::bindings::BindingTable;
@@ -34,6 +39,7 @@ use crate::shared::classify::Classify;
 use crate::shared::utils::{dedupe_attributes, is_component_name, is_literal_only_expression};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourceSpan {
     pub start: u32,
     pub end: u32,
@@ -124,36 +130,48 @@ pub enum TerminalDecision {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutionSite {
     pub span: SourceSpan,
     pub kind: ExecutionSiteKind,
     pub decision: TerminalDecision,
 }
 
-/// Reactive owner state established by compiler-generated lowering around a
-/// source region. The trace reports only states the compiler proves; absence
-/// means the surrounding runtime or caller determines ownership.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum OwnershipDecision {
-    Owned,
-    Unowned,
-    Leaf,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct OwnershipSite {
+/// A wrapper emitted by lowering around a source span.
+///
+/// This is deliberately an observation, not an ownership or timing claim.
+/// `wrapper` preserves the emitted wrapper identity, including a custom name;
+/// consumers decide whether that identity is audited by their dialect and map
+/// unaudited identities to their own unknown state. `group_id` links source
+/// spans that share one keyed wrapper invocation.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwnerEstablishment {
     pub span: SourceSpan,
-    pub decision: OwnershipDecision,
+    pub wrapper: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<u64>,
 }
 
 /// Facts about how JSX source values and callbacks were lowered and will
 /// execute, as observed during DOM lowering.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SemanticTrace {
+    pub version: u32,
     pub sites: Vec<ExecutionSite>,
     #[serde(default)]
-    pub ownership_sites: Vec<OwnershipSite>,
+    pub owner_establishments: Vec<OwnerEstablishment>,
+}
+
+impl Default for SemanticTrace {
+    fn default() -> Self {
+        Self {
+            version: SEMANTIC_TRACE_VERSION,
+            sites: Vec::new(),
+            owner_establishments: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -174,6 +192,7 @@ impl ExecutionCensus {
         static_marker: &str,
         built_ins: &[String],
         inline_styles: bool,
+        hydratable: bool,
     ) -> Self {
         let mut bindings = BindingTable::default();
         bindings.scan_builtin_shadowing(program, built_ins);
@@ -205,6 +224,7 @@ impl ExecutionCensus {
             /// element's child list at all.
             component_child_fragments: BTreeSet<SourceSpan>,
             inline_styles: bool,
+            hydratable: bool,
             /// Value spans the compiler discards wholesale. Nothing inside one
             /// is ever lowered, so nothing inside one is a site — including
             /// JSX nested in the discarded value.
@@ -358,6 +378,13 @@ impl ExecutionCensus {
 
         impl<'b> Visit<'b> for CensusVisitor<'_, '_> {
             fn visit_jsx_element(&mut self, element: &JSXElement<'b>) {
+                if self
+                    .dropped_ranges
+                    .iter()
+                    .any(|range| range.start <= element.span.start && element.span.end <= range.end)
+                {
+                    return;
+                }
                 let component = is_component_name(&element.opening_element.name);
                 let native_tag_name = (!component)
                     .then(|| Self::native_tag_name(element))
@@ -403,6 +430,16 @@ impl ExecutionCensus {
                 // entirely: the value never lowers, so neither it nor any JSX
                 // nested inside it is a site.
                 let dropped_before = self.dropped_ranges.len();
+                if !self.hydratable && native_tag_name.is_some() {
+                    for child in &element.children {
+                        let JSXChild::Element(child) = child else {
+                            continue;
+                        };
+                        if Self::native_tag_name(child).is_some_and(|name| name == "head") {
+                            self.dropped_ranges.push(child.span);
+                        }
+                    }
+                }
                 if component && !element.children.is_empty() {
                     for item in &element.opening_element.attributes {
                         let JSXAttributeItem::Attribute(attribute) = item else {
@@ -650,6 +687,7 @@ impl ExecutionCensus {
             classify: Classify::new(&bindings, source, static_marker),
             component_child_fragments: BTreeSet::new(),
             inline_styles,
+            hydratable,
             dropped_ranges: Vec::new(),
         };
         visitor.visit_program(program);
@@ -664,7 +702,9 @@ impl ExecutionCensus {
 pub(crate) struct TraceRecorder {
     census: Option<ExecutionCensus>,
     decisions: BTreeMap<SiteKey, TerminalDecision>,
-    default_effect_wrapper: bool,
+    owner_establishments: Vec<OwnerEstablishment>,
+    next_group_id: u64,
+    suppression_depth: usize,
     error: Option<String>,
 }
 
@@ -675,11 +715,44 @@ impl TraceRecorder {
         Self::default()
     }
 
-    pub(crate) fn new(census: ExecutionCensus, default_effect_wrapper: bool) -> Self {
+    pub(crate) fn new(census: ExecutionCensus) -> Self {
         Self {
             census: Some(census),
-            default_effect_wrapper,
             ..Self::default()
+        }
+    }
+
+    pub(crate) fn next_group_id(&mut self) -> u64 {
+        if !self.is_recording() {
+            return 0;
+        }
+        let group_id = self.next_group_id;
+        self.next_group_id = self.next_group_id.wrapping_add(1);
+        group_id
+    }
+
+    pub(crate) fn is_recording(&self) -> bool {
+        self.census.is_some() && self.suppression_depth == 0
+    }
+
+    pub(crate) fn suppress(&mut self) {
+        self.suppression_depth += 1;
+    }
+
+    pub(crate) fn resume(&mut self) {
+        self.suppression_depth = self
+            .suppression_depth
+            .checked_sub(1)
+            .expect("semantic trace suppression must be balanced");
+    }
+
+    pub(crate) fn owner_establishment(&mut self, span: Span, wrapper: &str, group_id: Option<u64>) {
+        if self.is_recording() {
+            self.owner_establishments.push(OwnerEstablishment {
+                span: span.into(),
+                wrapper: wrapper.to_string(),
+                group_id,
+            });
         }
     }
 
@@ -739,6 +812,9 @@ impl TraceRecorder {
     /// Retracting a site that was never censused, or one already decided, is a
     /// no-op; this only ever removes a site nothing has spoken for.
     pub(crate) fn retract(&mut self, span: Span, kind: ExecutionSiteKind) {
+        if !self.is_recording() {
+            return;
+        }
         let key = SiteKey {
             span: span.into(),
             kind,
@@ -765,6 +841,9 @@ impl TraceRecorder {
     }
 
     fn resolve(&mut self, span: Span, kind: ExecutionSiteKind, decision: TerminalDecision) {
+        if !self.is_recording() {
+            return;
+        }
         let Some(census) = &self.census else {
             return;
         };
@@ -835,26 +914,13 @@ impl TraceRecorder {
                 decision: self.decisions[&site],
             })
             .collect::<Vec<_>>();
-        let ownership_sites = if self.default_effect_wrapper {
-            sites
-                .iter()
-                .filter_map(|site| {
-                    matches!(
-                        site.decision,
-                        TerminalDecision::Value(ValueDecision::ReactiveRerun)
-                    )
-                    .then_some(OwnershipSite {
-                        span: site.span,
-                        decision: OwnershipDecision::Owned,
-                    })
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let mut owner_establishments = self.owner_establishments;
+        owner_establishments.sort_unstable();
+        owner_establishments.dedup();
         Ok(Some(SemanticTrace {
+            version: SEMANTIC_TRACE_VERSION,
             sites,
-            ownership_sites,
+            owner_establishments,
         }))
     }
 }
@@ -877,13 +943,13 @@ mod tests {
 
     #[test]
     fn finish_rejects_an_unresolved_site() {
-        let recorder = TraceRecorder::new(census(ExecutionSiteKind::JsxChild), true);
+        let recorder = TraceRecorder::new(census(ExecutionSiteKind::JsxChild));
         assert!(recorder.finish().unwrap_err().contains("unresolved"));
     }
 
     #[test]
     fn finish_rejects_conflicting_decisions() {
-        let mut recorder = TraceRecorder::new(census(ExecutionSiteKind::JsxChild), true);
+        let mut recorder = TraceRecorder::new(census(ExecutionSiteKind::JsxChild));
         let span = Span::new(1, 2);
         recorder.value(
             span,
@@ -896,7 +962,7 @@ mod tests {
 
     #[test]
     fn finish_rejects_uncensused_decisions() {
-        let mut recorder = TraceRecorder::new(census(ExecutionSiteKind::JsxChild), true);
+        let mut recorder = TraceRecorder::new(census(ExecutionSiteKind::JsxChild));
         recorder.value(
             Span::new(7, 9),
             ExecutionSiteKind::JsxChild,
@@ -907,7 +973,7 @@ mod tests {
 
     #[test]
     fn finish_rejects_a_miscategorized_decision() {
-        let mut recorder = TraceRecorder::new(census(ExecutionSiteKind::JsxChild), true);
+        let mut recorder = TraceRecorder::new(census(ExecutionSiteKind::JsxChild));
         recorder.callback(
             Span::new(1, 2),
             ExecutionSiteKind::JsxChild,
@@ -929,7 +995,7 @@ mod tests {
 
     #[test]
     fn repeated_identical_decisions_are_idempotent() {
-        let mut recorder = TraceRecorder::new(census(ExecutionSiteKind::JsxChild), true);
+        let mut recorder = TraceRecorder::new(census(ExecutionSiteKind::JsxChild));
         let span = Span::new(1, 2);
         recorder.value(span, ExecutionSiteKind::JsxChild, ValueDecision::EagerOnce);
         recorder.value(span, ExecutionSiteKind::JsxChild, ValueDecision::EagerOnce);
@@ -938,35 +1004,39 @@ mod tests {
     }
 
     #[test]
-    fn default_effect_reruns_prove_owned_regions() {
-        let mut recorder = TraceRecorder::new(census(ExecutionSiteKind::JsxChild), true);
+    fn owner_establishments_are_recorded_at_emission_sites() {
+        let mut recorder = TraceRecorder::new(census(ExecutionSiteKind::JsxChild));
         recorder.value(
             Span::new(1, 2),
             ExecutionSiteKind::JsxChild,
             ValueDecision::ReactiveRerun,
         );
+        let group_id = recorder.next_group_id();
+        recorder.owner_establishment(Span::new(1, 2), "effect", Some(group_id));
+        recorder.owner_establishment(Span::new(1, 2), "effect", Some(group_id));
+        recorder.owner_establishment(Span::new(3, 4), "effect", Some(group_id));
+        let trace = recorder.finish().unwrap().unwrap();
         assert_eq!(
-            recorder.finish().unwrap().unwrap().ownership_sites,
-            vec![OwnershipSite {
-                span: SourceSpan { start: 1, end: 2 },
-                decision: OwnershipDecision::Owned,
-            }]
+            trace.owner_establishments,
+            vec![
+                OwnerEstablishment {
+                    span: SourceSpan { start: 1, end: 2 },
+                    wrapper: "effect".into(),
+                    group_id: Some(0),
+                },
+                OwnerEstablishment {
+                    span: SourceSpan { start: 3, end: 4 },
+                    wrapper: "effect".into(),
+                    group_id: Some(0),
+                },
+            ]
         );
     }
 
     #[test]
-    fn custom_effect_reruns_make_no_owner_claim() {
-        let mut recorder = TraceRecorder::new(census(ExecutionSiteKind::JsxChild), false);
-        recorder.value(
-            Span::new(1, 2),
-            ExecutionSiteKind::JsxChild,
-            ValueDecision::ReactiveRerun,
-        );
-        assert!(recorder
-            .finish()
-            .unwrap()
-            .unwrap()
-            .ownership_sites
-            .is_empty());
+    fn disabled_recorders_do_not_allocate_owner_facts() {
+        let mut recorder = TraceRecorder::disabled();
+        recorder.owner_establishment(Span::new(1, 2), "customEffect", None);
+        assert_eq!(recorder.finish().unwrap(), None);
     }
 }
