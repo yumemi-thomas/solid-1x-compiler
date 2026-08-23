@@ -88,13 +88,33 @@ the compiler discards wholesale.
 ## Lowering wrapper facts
 
 `owner_establishments` records the wrapper identity and source span at the
-lowering site that emitted it. The span rule is uniform: it is the exact
-source span of the expression or JSX node whose lowering is being wrapped —
-never the JSX expression container including braces, the whole attribute, or
-the parent element. When the construct has an `ExecutionSite`, the spans are
-equality-joinable; JSX-node facts join to `ComponentRenderSite` or
-`DeferredCallbackSite` spans. It is additive evidence about compiler output,
-not a runtime ownership, ancestry, timing, or render-occurrence claim.
+lowering site that emitted it, one fact per wrapper call the lowering emits.
+The span rule is uniform: it is the exact source span of the expression or JSX
+node whose lowering is being wrapped — never the JSX expression container
+including braces, the whole attribute, or the parent element. When the
+construct has an `ExecutionSite`, the spans are equality-joinable; JSX-node
+facts join to `ComponentRenderSite` or `DeferredCallbackSite` spans. It is
+additive evidence about compiler output, not a runtime ownership, ancestry,
+timing, or render-occurrence claim.
+
+A conditional's memo is the one case where the wrapped expression is smaller
+than the site: `{cond() ? left() : right()}` lowers to
+`memo(() => !!cond())`, with the branches evaluated in the insert's or
+getter's scope, so the memo fact is spanned at `cond()` — the test it actually
+memoizes — and is *contained by* the enclosing site's span rather than equal
+to it. Each memo the lowering emits gets its own fact, so a nested conditional
+reports one fact per memoized test, and a fragment or component child whose
+thunk is also memo-wrapped reports that memo separately at the child
+expression's span.
+
+Two consequences for a consumer building a map from these facts. **A span is
+not a unique key**: one span can carry more than one wrapper identity — a
+component child is both rendered and inserted at the same span
+(`createComponent` + `insert`) — so key on `(span, identity)`, never on the
+span alone. And **a fact need not join to any site**: a literal-only hole such
+as `<div>{true}{undefined}{null}</div>` really does emit an `insert` per hole,
+and those inserts are reported, but literal-only leaves are deliberately not
+`ExecutionSite`s, so those facts join to nothing.
 
 Facts are additive within schema version 2, but the schema is intentionally
 strict: `SemanticTrace` rejects unknown fields and consumers must reject an

@@ -382,11 +382,7 @@ impl<'a> AstDomTransform<'a, '_> {
                         let value =
                             jsx_expression_to_expression(&container.expression, self.allocator);
                         let value = if dynamic {
-                            self.dom_child_expression(
-                                container.span,
-                                container.expression.span(),
-                                value,
-                            )
+                            self.dom_child_expression(container.span, value)
                         } else {
                             value
                         };

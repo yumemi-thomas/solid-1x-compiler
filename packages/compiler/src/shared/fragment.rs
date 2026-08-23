@@ -56,7 +56,7 @@ pub(crate) fn lower_fragment<'a, C: ModeLower<'a>>(
                     continue;
                 }
                 let thunk = dynamic_child_thunk(ctx, container.span, expression);
-                values.push(ctx.memo_wrap_dynamic_child_with_trace(
+                values.push(ctx.memo_wrap_dynamic_child(
                     container.span,
                     container.expression.span(),
                     thunk,
@@ -88,7 +88,7 @@ pub(crate) fn lower_fragment<'a, C: ModeLower<'a>>(
                     continue;
                 }
                 let thunk = arrow_return_expression(allocator, spread.span, expression);
-                values.push(ctx.memo_wrap_dynamic_child_with_trace(
+                values.push(ctx.memo_wrap_dynamic_child(
                     spread.span,
                     spread.expression.span(),
                     thunk,

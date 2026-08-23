@@ -139,34 +139,31 @@ fn booleanize<'a>(allocator: &'a Allocator, span: Span, value: Expression<'a>) -
 /// The memoized-condition handle: inline mode calls the memo expression
 /// directly (`memo(() => cond)()`), hoisted mode calls a generated id that the
 /// caller declares (`_c$()`).
+///
+/// `trace_span` is the source span of the test this memo actually memoizes —
+/// the memo wraps the booleanized test, never the surrounding conditional — so
+/// the hoisted form can emit its fact at the same span the inline form does.
 struct ConditionHoist<'a> {
     condition: Expression<'a>,
     id: String,
+    trace_span: Span,
 }
 
+/// Condition lowering. The emission span (`span`) is Babel's and is never
+/// derived from tracing; every memo fact is emitted at the span of the test it
+/// memoizes, which this function derives itself — there is deliberately no
+/// caller-supplied trace span to get wrong.
 pub(crate) fn transform_condition<'a, C: ConditionBuilder<'a>>(
     ctx: &mut C,
     span: Span,
     value: Expression<'a>,
     inline: bool,
 ) -> TransformedCondition<'a> {
-    transform_condition_with_trace(ctx, span, span, value, inline)
-}
-
-/// Condition lowering with an unchanged emission span and an exact source span
-/// for any memo fact it emits.
-pub(crate) fn transform_condition_with_trace<'a, C: ConditionBuilder<'a>>(
-    ctx: &mut C,
-    span: Span,
-    trace_span: Span,
-    value: Expression<'a>,
-    inline: bool,
-) -> TransformedCondition<'a> {
     let allocator = ctx.condition_allocator();
-    let (expr, hoist) = transform_condition_value(ctx, span, trace_span, value, inline);
+    let (expr, hoist) = transform_condition_value(ctx, span, value, inline);
     if let Some(hoist) = hoist {
         debug_assert!(!inline, "inline conditions never hoist");
-        let memo_init = memo_expression(ctx, span, trace_span, hoist.condition);
+        let memo_init = memo_expression(ctx, span, hoist.trace_span, hoist.condition);
         let memo_statement = variable_statement(
             allocator,
             span,
@@ -183,27 +180,21 @@ pub(crate) fn transform_condition_with_trace<'a, C: ConditionBuilder<'a>>(
 }
 
 /// `transformCondition(path, true).body` — the transformed expression itself,
-/// with memos collapsed inline.
+/// with memos collapsed inline. Memo facts are spanned as in
+/// [`transform_condition`].
 pub(crate) fn transform_condition_inline<'a, C: ConditionBuilder<'a>>(
     ctx: &mut C,
     span: Span,
     value: Expression<'a>,
 ) -> Expression<'a> {
-    transform_condition_inline_with_trace(ctx, span, span, value)
-}
-
-/// Inline condition lowering with an unchanged emission span and an exact
-/// source span for any memo fact it emits.
-pub(crate) fn transform_condition_inline_with_trace<'a, C: ConditionBuilder<'a>>(
-    ctx: &mut C,
-    span: Span,
-    trace_span: Span,
-    value: Expression<'a>,
-) -> Expression<'a> {
-    transform_condition_value(ctx, span, trace_span, value, true).0
+    transform_condition_value(ctx, span, value, true).0
 }
 
 /// `memo(thunk)` — or the thunk unchanged when `memoWrapper` is disabled.
+///
+/// For generates that do not trace only: it reports at the emission span, so a
+/// tracing generate must call [`memo_wrap_thunk_with_trace`] with the wrapped
+/// expression's own span instead.
 pub(crate) fn memo_wrap_thunk<'a, C: ConditionBuilder<'a>>(
     ctx: &mut C,
     span: Span,
@@ -263,7 +254,8 @@ fn call_expression_no_args<'a>(
 }
 
 /// Builds the `id()` (hoisted) or `memo(() => cond)()` (inline) test call and
-/// the hoist record for the caller.
+/// the hoist record for the caller. `trace_span` is the source span of the test
+/// being memoized — one memo emission, one fact, at its own span.
 fn condition_test_call<'a, C: ConditionBuilder<'a>>(
     ctx: &mut C,
     span: Span,
@@ -283,14 +275,20 @@ fn condition_test_call<'a, C: ConditionBuilder<'a>>(
             span,
             ast.expression_identifier(span, ast.ident(&id)),
         );
-        (call, Some(ConditionHoist { condition, id }))
+        (
+            call,
+            Some(ConditionHoist {
+                condition,
+                id,
+                trace_span,
+            }),
+        )
     }
 }
 
 fn transform_condition_value<'a, C: ConditionBuilder<'a>>(
     ctx: &mut C,
     span: Span,
-    trace_span: Span,
     value: Expression<'a>,
     inline: bool,
 ) -> (Expression<'a>, Option<ConditionHoist<'a>>) {
@@ -320,23 +318,17 @@ fn transform_condition_value<'a, C: ConditionBuilder<'a>>(
             if !ctx.classify().is_dynamic(None, &conditional.test, false) {
                 return (Expression::ConditionalExpression(conditional), None);
             }
+            // The memo wraps the booleanized *test*; the branches run in the
+            // caller's scope, so the fact belongs at the test's own span.
+            let test_span = conditional.test.span();
             let condition = booleanize(allocator, span, conditional.test.clone_in(allocator));
-            let (test_call, hoist) = condition_test_call(ctx, span, trace_span, condition, inline);
+            let (test_call, hoist) = condition_test_call(ctx, span, test_span, condition, inline);
             // Nested conditionals/logicals in the branches collapse their own
             // memos inline, exactly like Babel's recursive
-            // `transformCondition(..., true).body`.
-            let consequent = inline_branch(
-                ctx,
-                span,
-                trace_span,
-                conditional.consequent.clone_in(allocator),
-            );
-            let alternate = inline_branch(
-                ctx,
-                span,
-                trace_span,
-                conditional.alternate.clone_in(allocator),
-            );
+            // `transformCondition(..., true).body` — and record their own
+            // memos at their own tests' spans.
+            let consequent = inline_branch(ctx, span, conditional.consequent.clone_in(allocator));
+            let alternate = inline_branch(ctx, span, conditional.alternate.clone_in(allocator));
             let ast = AstBuilder::new(allocator);
             (
                 ast.expression_conditional(span, test_call, consequent, alternate),
@@ -346,13 +338,9 @@ fn transform_condition_value<'a, C: ConditionBuilder<'a>>(
         Expression::ConditionalExpression(conditional) => {
             (Expression::ConditionalExpression(conditional), None)
         }
-        Expression::LogicalExpression(logical) => transform_logical_chain(
-            ctx,
-            span,
-            trace_span,
-            Expression::LogicalExpression(logical),
-            inline,
-        ),
+        Expression::LogicalExpression(logical) => {
+            transform_logical_chain(ctx, span, Expression::LogicalExpression(logical), inline)
+        }
         other => (other, None),
     }
 }
@@ -360,11 +348,10 @@ fn transform_condition_value<'a, C: ConditionBuilder<'a>>(
 fn inline_branch<'a, C: ConditionBuilder<'a>>(
     ctx: &mut C,
     span: Span,
-    trace_span: Span,
     branch: Expression<'a>,
 ) -> Expression<'a> {
     if is_condition_shape(&branch) {
-        transform_condition_value(ctx, span, trace_span, branch, true).0
+        transform_condition_value(ctx, span, branch, true).0
     } else {
         branch
     }
@@ -376,7 +363,6 @@ fn inline_branch<'a, C: ConditionBuilder<'a>>(
 fn transform_logical_chain<'a, C: ConditionBuilder<'a>>(
     ctx: &mut C,
     span: Span,
-    trace_span: Span,
     value: Expression<'a>,
     inline: bool,
 ) -> (Expression<'a>, Option<ConditionHoist<'a>>) {
@@ -386,13 +372,8 @@ fn transform_logical_chain<'a, C: ConditionBuilder<'a>>(
     };
     if logical.operator != LogicalOperator::And {
         if matches!(logical.left, Expression::LogicalExpression(_)) {
-            let (new_left, hoist) = transform_logical_chain(
-                ctx,
-                span,
-                trace_span,
-                logical.left.clone_in(allocator),
-                inline,
-            );
+            let (new_left, hoist) =
+                transform_logical_chain(ctx, span, logical.left.clone_in(allocator), inline);
             let ast = AstBuilder::new(allocator);
             return (
                 ast.expression_logical(
@@ -415,8 +396,11 @@ fn transform_logical_chain<'a, C: ConditionBuilder<'a>>(
     }
     // Solid 1.x replaces the left operand with the memoized boolean getter
     // directly. The value-preserving ternary is a later compiler behavior.
+    // The memo covers the booleanized left operand only — the right operand
+    // still evaluates in the caller's scope — so the fact is spanned there.
+    let left_span = logical.left.span();
     let condition = booleanize(allocator, span, logical.left.clone_in(allocator));
-    let (test_call, hoist) = condition_test_call(ctx, span, trace_span, condition, inline);
+    let (test_call, hoist) = condition_test_call(ctx, span, left_span, condition, inline);
     let ast = AstBuilder::new(allocator);
     let replaced = ast.expression_logical(
         span,

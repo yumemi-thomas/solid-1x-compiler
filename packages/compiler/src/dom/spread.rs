@@ -6,7 +6,7 @@ use oxc_span::{GetSpan, Span};
 use crate::dom::element::AstDomTransform;
 use crate::shared::ast::arrow_return_expression;
 use crate::shared::condition::{
-    is_condition_shape, transform_condition_inline_with_trace, zero_arg_call_thunk,
+    is_condition_shape, transform_condition_inline, zero_arg_call_thunk,
 };
 use crate::shared::constants::{dom_properties, svg_elements};
 use crate::shared::utils::{decode_html_entities, source_from_span};
@@ -317,12 +317,7 @@ impl<'a> AstDomTransform<'a, '_> {
                     // Babel: logical/conditional getter bodies flow through
                     // `transformCondition(..., inline)`.
                     let value = if self.wrap_conditionals && is_condition_shape(&value) {
-                        transform_condition_inline_with_trace(
-                            self,
-                            container.span,
-                            container.expression.span(),
-                            value,
-                        )
+                        transform_condition_inline(self, container.span, value)
                     } else {
                         value
                     };

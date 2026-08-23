@@ -511,39 +511,80 @@ fn the_callback_fragment_shape_records_the_memo_wrapper_at_its_span() {
     }));
 }
 
-#[test]
-fn component_child_condition_memo_uses_the_expression_span() {
-    let source = "const C = () => <Show>{value() ? left() : right()}</Show>;";
-    let rendered = trace(source);
-    let memos = rendered
+/// Every memo fact as `(start, end, source text)`, in report order.
+fn memos(source: &str) -> Vec<(u32, u32, &str)> {
+    trace(source)
         .owner_establishments
-        .iter()
+        .into_iter()
         .filter(|site| site.wrapper == "memo")
-        .map(|site| &source[site.span.start as usize..site.span.end as usize])
-        .collect::<Vec<_>>();
-    assert_eq!(memos, ["value() ? left() : right()"]);
+        .map(|site| {
+            (
+                site.span.start,
+                site.span.end,
+                &source[site.span.start as usize..site.span.end as usize],
+            )
+        })
+        .collect::<Vec<_>>()
+}
+
+/// The emitted `memo(...)` calls, which every memo fact must correspond to
+/// one-for-one.
+fn emitted_memo_count(source: &str) -> usize {
+    emitted(source).matches("_$memo(").count()
 }
 
 #[test]
-fn native_condition_memos_use_the_expression_span() {
-    for source in [
-        "const C = () => <div>{value() ? left() : right()}</div>;",
-        "const C = () => <div {...props} title={other() ? yes() : no()} />;",
+fn component_child_condition_memo_spans_the_booleanized_test() {
+    // The memo wraps `!!value()`; `left()` and `right()` run in the child
+    // getter's scope, not inside the memo, so the fact covers the test alone.
+    let source = "const C = () => <Show>{value() ? left() : right()}</Show>;";
+    assert_eq!(memos(source), [(23, 30, "value()")]);
+    assert_eq!(emitted_memo_count(source), 1);
+}
+
+#[test]
+fn native_condition_memos_span_the_booleanized_test() {
+    for (source, expected) in [
+        (
+            "const C = () => <div>{value() ? left() : right()}</div>;",
+            (22, 29, "value()"),
+        ),
+        (
+            "const C = () => <div {...props} title={other() ? yes() : no()} />;",
+            (39, 46, "other()"),
+        ),
+        (
+            "const C = () => <div>{cond() && x()}</div>;",
+            (22, 28, "cond()"),
+        ),
     ] {
-        let trace = trace(source);
-        let memos = trace
-            .owner_establishments
-            .iter()
-            .filter(|site| site.wrapper == "memo")
-            .map(|site| &source[site.span.start as usize..site.span.end as usize])
-            .collect::<Vec<_>>();
-        let expected = if source.contains("other()") {
-            ["other() ? yes() : no()"]
-        } else {
-            ["value() ? left() : right()"]
-        };
-        assert_eq!(memos, expected);
+        assert_eq!(memos(source), [expected], "{source}");
+        assert_eq!(emitted_memo_count(source), 1, "{source}");
     }
+}
+
+#[test]
+fn a_fragment_child_condition_memo_is_brace_free_and_one_fact_per_memo() {
+    // The path that reaches `transform_condition_inline` through
+    // `dynamic_child_thunk`. Two memos are emitted — the fragment child's own
+    // thunk wrapper and the condition test — and each is reported at its own
+    // span. Neither covers `{`…`}`.
+    let source = "const a = <Show><>{cond() ? <div/> : x()}</></Show>;";
+    assert_eq!(
+        memos(source),
+        [(19, 25, "cond()"), (19, 40, "cond() ? <div/> : x()")]
+    );
+    assert_eq!(emitted_memo_count(source), 2);
+}
+
+#[test]
+fn nested_condition_memos_are_reported_one_per_memo() {
+    // Two tests are memoized (`!!x()` and `!!y()`), so two facts exist. A
+    // fact spanning the whole conditional would collapse them into one and
+    // would also claim the branches are memoized, which they are not.
+    let source = "const C = () => <div>{x() ? (y() ? a() : b()) : c()}</div>;";
+    assert_eq!(memos(source), [(22, 25, "x()"), (29, 32, "y()")]);
+    assert_eq!(emitted_memo_count(source), 2);
 }
 
 #[test]
