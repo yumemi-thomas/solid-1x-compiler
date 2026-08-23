@@ -685,6 +685,38 @@ fn discarded_nested_head_lowering_emits_no_trace_facts() {
 }
 
 #[test]
+fn component_render_sites_are_recorded_at_component_lowering() {
+    let source = r#"const C = () => <Show when={true}><Thing value={1} /></Show>;"#;
+    let rendered = trace(source);
+    let render_sites = rendered
+        .component_render_sites
+        .iter()
+        .map(|site| &source[site.span.start as usize..site.span.end as usize])
+        .collect::<Vec<_>>();
+    assert_eq!(
+        render_sites,
+        [
+            "<Show when={true}><Thing value={1} /></Show>",
+            "<Thing value={1} />",
+        ]
+    );
+
+    let member_source = "const C = () => <Thing.Item />;";
+    let member_trace = trace(member_source);
+    assert_eq!(
+        member_trace
+            .component_render_sites
+            .iter()
+            .map(|site| &member_source[site.span.start as usize..site.span.end as usize])
+            .collect::<Vec<_>>(),
+        ["<Thing.Item />"]
+    );
+
+    let native_trace = trace("const C = () => <div />;");
+    assert!(native_trace.component_render_sites.is_empty());
+}
+
+#[test]
 fn custom_memo_and_disabled_wrappers_are_reported_without_inference() {
     let custom = compile(
         FRAGMENT_IN_A_PROP_CALLBACK,

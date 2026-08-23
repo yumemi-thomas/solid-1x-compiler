@@ -153,6 +153,16 @@ pub struct OwnerEstablishment {
     pub group_id: Option<u64>,
 }
 
+/// A JSX component render site emitted by lowering.
+///
+/// This records only the source span where the component render is emitted;
+/// it does not claim anything about the component's runtime behavior.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComponentRenderSite {
+    pub span: SourceSpan,
+}
+
 /// Facts about how JSX source values and callbacks were lowered and will
 /// execute, as observed during DOM lowering.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -162,6 +172,8 @@ pub struct SemanticTrace {
     pub sites: Vec<ExecutionSite>,
     #[serde(default)]
     pub owner_establishments: Vec<OwnerEstablishment>,
+    #[serde(default)]
+    pub component_render_sites: Vec<ComponentRenderSite>,
 }
 
 impl Default for SemanticTrace {
@@ -170,6 +182,7 @@ impl Default for SemanticTrace {
             version: SEMANTIC_TRACE_VERSION,
             sites: Vec::new(),
             owner_establishments: Vec::new(),
+            component_render_sites: Vec::new(),
         }
     }
 }
@@ -703,6 +716,7 @@ pub(crate) struct TraceRecorder {
     census: Option<ExecutionCensus>,
     decisions: BTreeMap<SiteKey, TerminalDecision>,
     owner_establishments: Vec<OwnerEstablishment>,
+    component_render_sites: Vec<ComponentRenderSite>,
     next_group_id: u64,
     suppression_depth: usize,
     error: Option<String>,
@@ -753,6 +767,13 @@ impl TraceRecorder {
                 wrapper: wrapper.to_string(),
                 group_id,
             });
+        }
+    }
+
+    pub(crate) fn component_render_site(&mut self, span: Span) {
+        if self.is_recording() {
+            self.component_render_sites
+                .push(ComponentRenderSite { span: span.into() });
         }
     }
 
@@ -917,10 +938,14 @@ impl TraceRecorder {
         let mut owner_establishments = self.owner_establishments;
         owner_establishments.sort_unstable();
         owner_establishments.dedup();
+        let mut component_render_sites = self.component_render_sites;
+        component_render_sites.sort_unstable();
+        component_render_sites.dedup();
         Ok(Some(SemanticTrace {
             version: SEMANTIC_TRACE_VERSION,
             sites,
             owner_establishments,
+            component_render_sites,
         }))
     }
 }

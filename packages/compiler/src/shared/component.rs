@@ -32,6 +32,8 @@ pub(crate) trait ComponentLower<'a>:
 {
     /// Marks the `createComponent` helper as used.
     fn mark_create_component(&mut self);
+    /// Records a JSX component render site when the mode supplies a trace.
+    fn trace_component_render_site(&mut self, _span: Span) {}
     /// Whether this element is the JSX root currently being lowered (Babel
     /// keeps a raw `this` in the root tag callee).
     fn is_jsx_root_tag(&self, span: Span) -> bool;
@@ -52,6 +54,7 @@ pub(crate) fn lower_component_with_setup<'a, C: ComponentLower<'a>>(
     let allocator = ctx.condition_allocator();
     let ast = mode_ast(ctx);
     ctx.mark_create_component();
+    ctx.trace_component_render_site(element.span);
     ctx.trace_wrapper(element.span, "createComponent", None);
     // Function children of an unshadowed control-flow built-in are render
     // callbacks, not values.
@@ -254,6 +257,10 @@ fn component_prop_is_dynamic<'a, C: ComponentLower<'a>>(
 impl<'a> ComponentLower<'a> for AstDomTransform<'a, '_> {
     fn mark_create_component(&mut self) {
         self.template_state.uses_create_component = true;
+    }
+
+    fn trace_component_render_site(&mut self, span: Span) {
+        self.semantic_trace.component_render_site(span);
     }
 
     fn is_jsx_root_tag(&self, span: Span) -> bool {
