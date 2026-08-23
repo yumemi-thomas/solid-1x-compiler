@@ -63,21 +63,6 @@ pub enum ExecutionSiteKind {
 }
 
 impl ExecutionSiteKind {
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::JsxChild => "jsx-child",
-            Self::NativeAttribute => "native-attribute",
-            Self::NativeSpread => "native-spread",
-            Self::ComponentProperty => "component-property",
-            Self::ComponentSpread => "component-spread",
-            Self::ComponentChild => "component-child",
-            Self::EventHandler => "event-handler",
-            Self::Ref => "ref",
-            Self::ControlFlowRender => "control-flow-render",
-        }
-    }
-
     const fn is_value(self) -> bool {
         matches!(
             self,

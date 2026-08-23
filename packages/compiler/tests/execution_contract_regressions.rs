@@ -25,8 +25,8 @@
 //! break.
 
 use dom_expressions_compiler::{
-    compile, CompileOptions, ExecutionSiteKind, OwnershipDecision, SemanticTrace, TerminalDecision,
-    ValueDecision, Wrapper,
+    compile, CallbackDecision, CompileOptions, ExecutionSiteKind, OwnershipDecision, SemanticTrace,
+    TerminalDecision, ValueDecision, Wrapper,
 };
 
 fn options(semantic_trace: bool) -> CompileOptions {
@@ -52,17 +52,34 @@ fn trace(source: &str) -> SemanticTrace {
 /// source text rather than raw offsets keeps the expectations readable and
 /// makes a span that slides show up as a diff.
 fn sites(source: &str) -> Vec<(&str, ExecutionSiteKind, TerminalDecision)> {
-    trace(source)
-        .sites
-        .into_iter()
-        .map(|site| {
-            (
-                &source[site.span.start as usize..site.span.end as usize],
-                site.kind,
-                site.decision,
-            )
-        })
-        .collect()
+    sites_with_built_ins(source, vec!["For", "Show", "Switch", "Match"])
+}
+
+fn sites_with_built_ins<'a>(
+    source: &'a str,
+    built_ins: Vec<&str>,
+) -> Vec<(&'a str, ExecutionSiteKind, TerminalDecision)> {
+    compile(
+        source,
+        &CompileOptions {
+            built_ins: built_ins.into_iter().map(str::to_owned).collect(),
+            semantic_trace: true,
+            ..options(true)
+        },
+    )
+    .expect("compiles")
+    .semantic_trace
+    .expect("tracing was requested")
+    .sites
+    .into_iter()
+    .map(|site| {
+        (
+            &source[site.span.start as usize..site.span.end as usize],
+            site.kind,
+            site.decision,
+        )
+    })
+    .collect()
 }
 
 fn value(decision: ValueDecision) -> TerminalDecision {
@@ -356,6 +373,58 @@ fn the_callback_fragment_shape_on_a_plain_component_is_a_jsx_child() {
             ),
             ("props.b", ExecutionSiteKind::JsxChild),
         ]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Control-flow callback operation facts.
+//
+// The lowering owns this classification: a function child of a configured,
+// unshadowed built-in is emitted as a later render callback. A consumer can
+// therefore consume `ControlFlowRender` directly instead of rebuilding the
+// built-in test from its own AST.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_builtin_function_child_is_authoritatively_a_control_flow_render() {
+    let source = r#"const C = () => <Show>{() => <span>{value()}</span>}</Show>;"#;
+    assert_eq!(
+        sites_with_built_ins(source, vec!["Show"]),
+        [
+            (
+                "() => <span>{value()}</span>",
+                ExecutionSiteKind::ControlFlowRender,
+                TerminalDecision::Callback(CallbackDecision::LaterRender),
+            ),
+            (
+                "value()",
+                ExecutionSiteKind::JsxChild,
+                value(ValueDecision::ReactiveRerun),
+            )
+        ]
+    );
+}
+
+#[test]
+fn an_unconfigured_or_shadowed_builtin_stays_a_component_child() {
+    let unconfigured = r#"const C = () => <Show>{() => value()}</Show>;"#;
+    assert_eq!(
+        sites_with_built_ins(unconfigured, Vec::new()),
+        [(
+            "() => value()",
+            ExecutionSiteKind::ComponentChild,
+            value(ValueDecision::EagerOnce),
+        )]
+    );
+
+    let shadowed = r#"const Show = Thing; const C = () => <Show>{() => value()}</Show>;"#;
+    assert_eq!(
+        sites_with_built_ins(shadowed, vec!["Show"]),
+        [(
+            "() => value()",
+            ExecutionSiteKind::ComponentChild,
+            value(ValueDecision::EagerOnce),
+        )]
     );
 }
 

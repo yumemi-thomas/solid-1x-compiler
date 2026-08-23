@@ -60,8 +60,12 @@ configuration error rather than a partial answer, as does a source skipped by
 
 ## What a site says
 
-Each `ExecutionSite` carries a span, a `kind` naming the JSX position, and
-exactly one terminal decision. Sites are ordered deterministically by span.
+Each `ExecutionSite` carries a span, a closed `ExecutionSiteKind` naming the
+JSX position, and exactly one terminal decision. Sites are ordered
+deterministically by span. The kind is an observation of the lowering branch,
+not a runtime claim; in particular, `control-flow-render` is emitted by the
+lowering that creates the deferred callback. Consumers should use that fact
+instead of recomputing the callback from their own JSX AST.
 
 Value positions — `jsx-child`, `native-attribute`, `native-spread`,
 `component-property`, `component-spread`, `component-child` — decide between:
