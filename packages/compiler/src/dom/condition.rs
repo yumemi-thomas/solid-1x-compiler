@@ -46,6 +46,11 @@ impl<'a> ConditionBuilder<'a> for AstDomTransform<'a, '_> {
 }
 
 impl<'a> crate::shared::component_children::ComponentChildLower<'a> for AstDomTransform<'a, '_> {
+    fn trace_deferred_callback(&mut self, span: Span, receiver_span: Span) {
+        self.semantic_trace
+            .deferred_callback_site(span, receiver_span);
+    }
+
     fn lower_child_element_with_setup(
         &mut self,
         element: &JSXElement<'a>,

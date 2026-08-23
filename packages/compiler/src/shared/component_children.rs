@@ -20,6 +20,9 @@ use crate::shared::utils::{decode_html_entities, trim_jsx_text};
 /// children keep their setup statements (template declarations + operations)
 /// separate so the caller can host them in the `children` getter.
 pub(crate) trait ComponentChildLower<'a>: ModeLower<'a> {
+    /// Records a deferred child callback and its receiving JSX component.
+    fn trace_deferred_callback(&mut self, _span: oxc_span::Span, _receiver_span: oxc_span::Span) {}
+
     fn lower_child_element_with_setup(
         &mut self,
         element: &JSXElement<'a>,
@@ -61,6 +64,7 @@ pub(crate) fn component_children<'a, C: ComponentChildLower<'a>>(
     ctx: &mut C,
     children: &[JSXChild<'a>],
     render_callbacks: bool,
+    receiver_span: oxc_span::Span,
 ) -> Result<Option<ComponentChildren<'a>>> {
     let allocator = ctx.condition_allocator();
     let ast = mode_ast(ctx);
@@ -103,6 +107,7 @@ pub(crate) fn component_children<'a, C: ComponentChildLower<'a>>(
                             | JSXExpression::FunctionExpression(_)
                     );
                 if render_callback {
+                    ctx.trace_deferred_callback(container.expression.span(), receiver_span);
                     ctx.trace_callback(
                         container.expression.span(),
                         crate::semantic_trace::ExecutionSiteKind::ControlFlowRender,

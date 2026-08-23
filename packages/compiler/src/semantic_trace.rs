@@ -163,6 +163,17 @@ pub struct ComponentRenderSite {
     pub span: SourceSpan,
 }
 
+/// A deferred JSX callback site and the JSX component span that receives it.
+///
+/// Both spans are source locations only. This does not assert when the
+/// callback runs or what the receiver does with it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeferredCallbackSite {
+    pub span: SourceSpan,
+    pub receiver_span: SourceSpan,
+}
+
 /// Facts about how JSX source values and callbacks were lowered and will
 /// execute, as observed during DOM lowering.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -174,6 +185,8 @@ pub struct SemanticTrace {
     pub owner_establishments: Vec<OwnerEstablishment>,
     #[serde(default)]
     pub component_render_sites: Vec<ComponentRenderSite>,
+    #[serde(default)]
+    pub deferred_callback_sites: Vec<DeferredCallbackSite>,
 }
 
 impl Default for SemanticTrace {
@@ -183,6 +196,7 @@ impl Default for SemanticTrace {
             sites: Vec::new(),
             owner_establishments: Vec::new(),
             component_render_sites: Vec::new(),
+            deferred_callback_sites: Vec::new(),
         }
     }
 }
@@ -717,6 +731,7 @@ pub(crate) struct TraceRecorder {
     decisions: BTreeMap<SiteKey, TerminalDecision>,
     owner_establishments: Vec<OwnerEstablishment>,
     component_render_sites: Vec<ComponentRenderSite>,
+    deferred_callback_sites: Vec<DeferredCallbackSite>,
     next_group_id: u64,
     suppression_depth: usize,
     error: Option<String>,
@@ -774,6 +789,15 @@ impl TraceRecorder {
         if self.is_recording() {
             self.component_render_sites
                 .push(ComponentRenderSite { span: span.into() });
+        }
+    }
+
+    pub(crate) fn deferred_callback_site(&mut self, span: Span, receiver_span: Span) {
+        if self.is_recording() {
+            self.deferred_callback_sites.push(DeferredCallbackSite {
+                span: span.into(),
+                receiver_span: receiver_span.into(),
+            });
         }
     }
 
@@ -941,11 +965,15 @@ impl TraceRecorder {
         let mut component_render_sites = self.component_render_sites;
         component_render_sites.sort_unstable();
         component_render_sites.dedup();
+        let mut deferred_callback_sites = self.deferred_callback_sites;
+        deferred_callback_sites.sort_unstable();
+        deferred_callback_sites.dedup();
         Ok(Some(SemanticTrace {
             version: SEMANTIC_TRACE_VERSION,
             sites,
             owner_establishments,
             component_render_sites,
+            deferred_callback_sites,
         }))
     }
 }

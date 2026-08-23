@@ -91,6 +91,9 @@ pub(crate) fn lower_component_with_setup<'a, C: ComponentLower<'a>>(
                         crate::semantic_trace::ValueDecision::EagerOnce
                     },
                 );
+                if lowered.force_merge {
+                    ctx.trace_deferred_callback(semantic_span, element.span);
+                }
                 force_merge_props = force_merge_props || lowered.force_merge;
                 prop_objects.push(lowered.value);
                 continue;
@@ -147,6 +150,9 @@ pub(crate) fn lower_component_with_setup<'a, C: ComponentLower<'a>>(
                             crate::semantic_trace::ValueDecision::EagerOnce
                         },
                     );
+                    if dynamic {
+                        ctx.trace_deferred_callback(container.expression.span(), element.span);
+                    }
                 }
                 // JSX inside the value stays raw: Babel builds prop getters
                 // around the untransformed expression and its outer traversal
@@ -173,6 +179,7 @@ pub(crate) fn lower_component_with_setup<'a, C: ComponentLower<'a>>(
         if name == "ref" {
             let value_span = value.span();
             if let Some(ref_property) = ctx.component_ref_prop(attr.span, value, &mut setup) {
+                ctx.trace_deferred_callback(value_span, element.span);
                 ctx.trace_wrapper(value_span, "ref-apply", None);
                 running_props.push(ref_property);
             }
@@ -200,7 +207,7 @@ pub(crate) fn lower_component_with_setup<'a, C: ComponentLower<'a>>(
         }
     }
 
-    let children = component_children(ctx, &element.children, render_callbacks)?;
+    let children = component_children(ctx, &element.children, render_callbacks, element.span)?;
     if let Some(children) = children {
         if children.needs_getter {
             running_props.push(crate::shared::ast::object_getter_property_with_setup(

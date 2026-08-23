@@ -800,3 +800,71 @@ fn event_facts_partition_delegated_direct_and_capture_semantics() {
         .iter()
         .any(|site| site.wrapper == "direct"));
 }
+
+#[test]
+fn deferred_component_callbacks_record_their_receiver_span() {
+    let source =
+        r#"const C = (props) => <Thing label={props.label} ref={props.ref} {...props.data} />;"#;
+    let rendered = trace(source);
+    let callbacks = rendered
+        .deferred_callback_sites
+        .iter()
+        .map(|site| {
+            (
+                &source[site.span.start as usize..site.span.end as usize],
+                &source[site.receiver_span.start as usize..site.receiver_span.end as usize],
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        callbacks,
+        [
+            (
+                "props.label",
+                "<Thing label={props.label} ref={props.ref} {...props.data} />",
+            ),
+            (
+                "props.ref",
+                "<Thing label={props.label} ref={props.ref} {...props.data} />",
+            ),
+            (
+                "props.data",
+                "<Thing label={props.label} ref={props.ref} {...props.data} />",
+            ),
+        ]
+    );
+    let refs = rendered
+        .owner_establishments
+        .iter()
+        .filter(|site| site.wrapper == "ref-apply")
+        .map(|site| &source[site.span.start as usize..site.span.end as usize])
+        .collect::<Vec<_>>();
+    assert_eq!(refs, ["props.ref"]);
+}
+
+#[test]
+fn control_flow_child_callbacks_record_their_component_receiver() {
+    let source = "const C = () => <Show>{() => value()}</Show>;";
+    let rendered = trace(source);
+    let callbacks = rendered
+        .deferred_callback_sites
+        .iter()
+        .map(|site| {
+            (
+                &source[site.span.start as usize..site.span.end as usize],
+                &source[site.receiver_span.start as usize..site.receiver_span.end as usize],
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        callbacks,
+        [("() => value()", "<Show>{() => value()}</Show>")]
+    );
+}
+
+#[test]
+fn ordinary_component_children_are_not_control_flow_callbacks() {
+    let source = "const C = () => <Thing>{() => value()}</Thing>;";
+    let rendered = trace(source);
+    assert!(rendered.deferred_callback_sites.is_empty());
+}
