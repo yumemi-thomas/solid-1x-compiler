@@ -59,7 +59,17 @@ pub(crate) trait ModeLower<'a>: ConditionBuilder<'a> {
     /// Babel's `createTemplate(wrap: true)` for a dynamic child thunk:
     /// `memo(thunk)` in the client generates; ssr wraps the accessor body
     /// with `_$escape` first.
-    fn memo_wrap_dynamic_child(&mut self, span: Span, thunk: Expression<'a>) -> Expression<'a>;
+    ///
+    /// `span` is the emitted AST span and `trace_span` the source span of the
+    /// wrapped expression — deliberately two required arguments rather than a
+    /// defaulting overload, so a caller cannot silently trace at the emission
+    /// span. Non-DOM generates ignore `trace_span`; they do not trace.
+    fn memo_wrap_dynamic_child(
+        &mut self,
+        span: Span,
+        trace_span: Span,
+        thunk: Expression<'a>,
+    ) -> Expression<'a>;
 
     /// Span stamped on a multi-child fragment array (the dom generate keeps
     /// the first child's span; ssr and universal use the fragment's own).

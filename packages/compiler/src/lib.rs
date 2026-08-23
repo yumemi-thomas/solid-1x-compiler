@@ -28,8 +28,9 @@ mod universal;
 pub use compiler::{compile, CompileOptions, CompileOutput, Generate, Renderer, Wrapper};
 pub use error::{CompileError, CompileErrorKind};
 pub use semantic_trace::{
-    CallbackDecision, ExecutionSite, ExecutionSiteKind, OwnershipDecision, OwnershipSite,
-    SemanticTrace, SourceSpan, TerminalDecision, ValueDecision,
+    CallbackDecision, ComponentRenderSite, DeferredCallbackSite, ExecutionSite, ExecutionSiteKind,
+    OwnerEstablishment, SemanticTrace, SourceSpan, TerminalDecision, ValueDecision,
+    SEMANTIC_TRACE_VERSION,
 };
 
 #[cfg(feature = "node")]

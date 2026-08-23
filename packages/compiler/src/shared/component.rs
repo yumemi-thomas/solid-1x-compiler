@@ -32,6 +32,8 @@ pub(crate) trait ComponentLower<'a>:
 {
     /// Marks the `createComponent` helper as used.
     fn mark_create_component(&mut self);
+    /// Records a JSX component render site when the mode supplies a trace.
+    fn trace_component_render_site(&mut self, _span: Span) {}
     /// Whether this element is the JSX root currently being lowered (Babel
     /// keeps a raw `this` in the root tag callee).
     fn is_jsx_root_tag(&self, span: Span) -> bool;
@@ -52,6 +54,8 @@ pub(crate) fn lower_component_with_setup<'a, C: ComponentLower<'a>>(
     let allocator = ctx.condition_allocator();
     let ast = mode_ast(ctx);
     ctx.mark_create_component();
+    ctx.trace_component_render_site(element.span);
+    ctx.trace_wrapper(element.span, "createComponent", None);
     // Function children of an unshadowed control-flow built-in are render
     // callbacks, not values.
     let render_callbacks = match &element.opening_element.name {
@@ -87,6 +91,9 @@ pub(crate) fn lower_component_with_setup<'a, C: ComponentLower<'a>>(
                         crate::semantic_trace::ValueDecision::EagerOnce
                     },
                 );
+                if lowered.force_merge {
+                    ctx.trace_deferred_callback(semantic_span, element.span);
+                }
                 force_merge_props = force_merge_props || lowered.force_merge;
                 prop_objects.push(lowered.value);
                 continue;
@@ -143,6 +150,9 @@ pub(crate) fn lower_component_with_setup<'a, C: ComponentLower<'a>>(
                             crate::semantic_trace::ValueDecision::EagerOnce
                         },
                     );
+                    if dynamic {
+                        ctx.trace_deferred_callback(container.expression.span(), element.span);
+                    }
                 }
                 // JSX inside the value stays raw: Babel builds prop getters
                 // around the untransformed expression and its outer traversal
@@ -167,7 +177,10 @@ pub(crate) fn lower_component_with_setup<'a, C: ComponentLower<'a>>(
             }
         };
         if name == "ref" {
+            let value_span = value.span();
             if let Some(ref_property) = ctx.component_ref_prop(attr.span, value, &mut setup) {
+                ctx.trace_deferred_callback(value_span, element.span);
+                ctx.trace_wrapper(value_span, "ref-apply", None);
                 running_props.push(ref_property);
             }
         } else if needs_getter && !condition_inlined {
@@ -194,7 +207,7 @@ pub(crate) fn lower_component_with_setup<'a, C: ComponentLower<'a>>(
         }
     }
 
-    let children = component_children(ctx, &element.children, render_callbacks)?;
+    let children = component_children(ctx, &element.children, render_callbacks, element.span)?;
     if let Some(children) = children {
         if children.needs_getter {
             running_props.push(crate::shared::ast::object_getter_property_with_setup(
@@ -251,6 +264,10 @@ fn component_prop_is_dynamic<'a, C: ComponentLower<'a>>(
 impl<'a> ComponentLower<'a> for AstDomTransform<'a, '_> {
     fn mark_create_component(&mut self) {
         self.template_state.uses_create_component = true;
+    }
+
+    fn trace_component_render_site(&mut self, span: Span) {
+        self.semantic_trace.component_render_site(span);
     }
 
     fn is_jsx_root_tag(&self, span: Span) -> bool {
