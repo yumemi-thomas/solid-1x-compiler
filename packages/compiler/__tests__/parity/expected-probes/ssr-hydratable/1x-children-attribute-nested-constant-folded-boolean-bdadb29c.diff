@@ -1,0 +1,7 @@
+@@ -1,5 +1,4 @@
+-import { escape as _$escape__r_server } from "r-server";
+ import { ssr as _$ssr__r_server } from "r-server";
+ import { ssrHydrationKey as _$ssrHydrationKey__r_server } from "r-server";
+ var _g1$ = ["<div", "><span>", "</span></div>"];
+-const a = _$ssr__r_server(_g1$, _$ssrHydrationKey__r_server(), _$escape__r_server(true));
++const a = _$ssr__r_server(_g1$, _$ssrHydrationKey__r_server(), 1 === 1);

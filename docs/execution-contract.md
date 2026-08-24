@@ -164,3 +164,96 @@ If a change makes lowering drop a value, say so where it is dropped
 (`ValueDecision::Elided`); if it makes lowering emit a value the census does
 not enumerate, teach the census about it. Reconciliation will not let a change
 land with only one of the two updated.
+
+## Changing what a lowering emits
+
+A change to generated code is a contract change twice over: the trace has to
+follow it, and the Babel 1.x oracle has to agree with it. Two artifacts make
+that reviewable rather than discovered later.
+
+`tests/transform-output-baseline.txt` holds every corpus source's emitted bytes
+— each Babel fixture and each parity probe, hex-encoded, or `reject` where the
+compiler refuses the input — generated from the branch point.
+`transform_output_matches_checked_in_baseline` compares the current build
+against it and names every entry that moved.
+`tracing_does_not_change_generated_output` is *not* that invariant: both halves
+of one build can share the same codegen regression.
+
+The sequence for a deliberate transform change is: run the comparison first and
+account for every mover, then regenerate with
+
+```sh
+UPDATE_TRANSFORM_BASELINE=1 cargo test --no-default-features \
+  --test execution_contract_census regenerate_transform_output_baseline \
+  -- --ignored --nocapture
+```
+
+which is `#[ignore]`d and environment-gated precisely so no ordinary run — not
+even `--include-ignored` — can rewrite the witness as a side effect. A change
+that no fixture and no probe covers is a corpus gap: add the probes, and the
+regenerated baseline then grows by exactly those entries and nothing else.
+
+## Where this compiler and Babel 1.x still differ
+
+These are measured against the vendored `babel-plugin-jsx-dom-expressions`
+oracle, one probe per shape under `__tests__/parity/expected-probes/`, so each
+is a recorded divergence rather than an unnoticed one. The trace reports what
+*this* compiler does at each of them, faithfully; a consumer reasoning about
+Babel-compiled output should read them as the list of places where the two
+answers are not the same.
+
+1. **A template root's `children` attribute ignores a later dynamic
+   `textContent`.** Both attributes write Babel's single `children` slot in
+   source order, so `<div children={x()} textContent={t()}/>` keeps the
+   synthesized space text node and emits no insert. The root lowering promotes
+   the captured value before its attribute loop runs, so it has no position to
+   compare against and inserts anyway. The nested lowering does compare, and
+   agrees with Babel in both orders. Probe: `1x children attribute before
+   dynamic textContent`.
+2. **Void and `<noscript>` template roots still lower their source children.**
+   Babel guards the whole recursion — `if (!voidTag) { … if (tagName !==
+   "noscript") transformChildren(…) }` — so `<br>{c()}</br>`,
+   `<noscript>{c()}</noscript>` and `<noscript><span>s</span></noscript>` emit
+   nothing (and contribute no markup) there. This compiler inserts, and keeps
+   static children in the template. Only the `children`-attribute *promotion*
+   carries those two gates, in both positions; the general case is untouched.
+   Nested positions already agree with Babel.
+3. **A `children` value this compiler folds confidently is dropped where Babel
+   inserts it.** Babel's capture takes any container value that is not a string
+   or number after `evaluateAndInline`, so `children={null}`,
+   `children={undefined}`, `children={true}` and `children={{ a: 1 }}` become
+   `_$insert(el, null)` and friends. Here the capture is filtered by
+   `evaluate_confident`, which is confident about all four, so nothing is
+   emitted. Position-independent. The selection is still Babel's — the last
+   attribute Babel's capture keeps — and a capture dropped this way does *not*
+   fall back to an earlier `children` attribute, because Babel's own capture
+   already overwrote it: falling back would insert a value Babel never inserts.
+   Probes: `1x children attribute nested undefined`, `… nested boolean
+   literal`, `… nested confident object`, `1x duplicate children attributes
+   trailing null`, `… nested trailing boolean`.
+4. **A constant-foldable non-text value reaches the runtime unfolded.**
+   `children={1 === 1}` inserts `true` in Babel, which rewrote the node before
+   lowering, and `1 === 1` here. Independent of position and of generate — the
+   ssr and universal modes diverge on the same probe. Probe: `1x children
+   attribute nested constant folded boolean`.
+5. **A JSX-valued hole loses Babel's inner IIFE.** Babel emits
+   `() => (() => {…})()` where this compiler emits `() => {…}`, for
+   `children={<b>{x()}</b>}` as for any other JSX-valued hole, in every
+   position and in the universal modes too. Probe: `1x children attribute
+   nested jsx value`.
+6. **A nested custom element emits no `_$owner` context assignment.**
+   `should_capture_custom_element_context` runs only at the template root, so
+   `<div><my-el children={x()}/></div>` gets the insert but not the owner
+   write. Pre-existing; promoting the nested `children` value is what made it
+   visible. Probe: `1x children attribute nested custom element`.
+
+Two more shapes were measured while confirming the list and are recorded
+without probes of their own, so they are not mistaken for parity: a nested
+element whose only runtime work is a literal `children` property write
+(`<div><span children="s"/></div>`) makes the 1.x plugin *throw* — a one-sided
+reference failure, not a divergence — while this compiler emits the write; and
+a numeric `children={5}` becomes `.children = "5"` in Babel (`children` is not
+in `Properties`, so the fold stringifies it) against `.children = 5` here.
+Neither is in the probe corpus: pinning a reference failure also means
+enumerating it in the suite's `referenceRejected` set, which is a separate
+change from this one.

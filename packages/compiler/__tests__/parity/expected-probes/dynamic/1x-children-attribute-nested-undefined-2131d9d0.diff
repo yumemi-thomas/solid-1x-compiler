@@ -1,0 +1,7 @@
+@@ -1,6 +1,4 @@
+-import { insert as _$insert__r_dom } from "r-dom";
+ import { template as _$template__r_dom } from "r-dom";
+ var _g1$ = _$template__r_dom("<div><span>");
+ var _g2$ = _g1$();
+-_$insert__r_dom(_g2$.firstChild, undefined);
+ const a = _g2$;

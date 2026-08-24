@@ -72,7 +72,7 @@
   rules that could drift apart silently — as they already had for the
   `children`-shadowing gate below. They now cannot: a lowering path that stops
   reporting, or reports something unrecognized, is a build error. Two corpus
-  tests run all 74 Babel fixtures and all 442 parity probes through the
+  tests run every Babel fixture and every parity probe through the
   reconciliation.
 
   The wire format is unchanged (`wireVersion` 2, same facets, same site kinds
@@ -89,6 +89,49 @@
   byte-identical whether or not a contract was produced.
 
 ### Patch Changes
+
+- Promote a native element's `children` attribute in every position, not only
+  on a template root. Babel runs one `transformAttributes` per element, and its
+  push is `if (!hasChildren && children) path.node.children.push(children)`, so
+  `<div><span children={x()}/></div>` inserts — this compiler emitted nothing
+  at all for it. The nested lowering now performs the same capture under the
+  same gates, and reports the censused `jsx-child` site as the
+  `reactive-rerun` insert it emits instead of `elided`.
+
+  Three more shapes in that family were wrong and are fixed with it:
+
+  - A void element's or a `<noscript>`'s promoted value is no longer inserted.
+    Babel pushes the slot and then never visits it — `if (!voidTag) { … if
+    (tagName !== "noscript") transformChildren(…) }` — so `<br
+    children={x()}/>` and `<noscript children={c()}/>` emit nothing. The gates
+    cover the promotion; a void or `<noscript>` template root's own *source*
+    children are still lowered here, which is recorded as an open divergence.
+  - A `children` attribute whose value only folds to a literal no longer blocks
+    an earlier one. Babel's attribute loop assigns the slot from every
+    `children` attribute that is not a string or number *after*
+    `evaluateAndInline`, so `<div children={x()} children={"a" + "b"}/>` writes
+    the property and inserts `x()`; judging the fold on the reverse scan's
+    result rather than on each candidate dropped the promotion entirely. Solid
+    1.x does not deduplicate attributes by name, so selection is "the last
+    attribute the capture keeps", not "the last one named `children`" — and a
+    selected value this compiler cannot lower is dropped rather than falling
+    back to an earlier one, which would insert a value Babel never inserts.
+  - A dynamic `textContent` and a `children` attribute contend for Babel's one
+    `children` slot in source order, and the nested lowering now resolves that
+    contention by position: `<span textContent={t()} children={x()}/>` inserts,
+    the reverse spelling keeps the placeholder, and a literal `textContent`
+    never competes. The same `hasChildren` gate now also keeps a nested
+    element's real children when a dynamic `textContent` is present
+    (`<div><span textContent={t()}>hi</span></div>` had been emitting the
+    placeholder and discarding `hi`).
+
+  Forty-six probes pin the family across all nine modes; nine of them record
+  divergences that were already there in both positions (a template root
+  ignoring `textContent` order, unfolded and confidently-folded values, the
+  JSX-hole IIFE, a nested custom element's `_$owner`), now enumerated in
+  `docs/execution-contract.md`. `tests/transform-output-baseline.txt` and its
+  environment-gated regenerator arrive with this change as the byte-identity
+  witness for `transform()`: no pre-existing corpus entry moved.
 
 - Match Babel's `hasChildren` gate on components: a `children` attribute is
   discarded whenever the element has JSX children. Previously the DOM, SSR and

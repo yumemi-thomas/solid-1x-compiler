@@ -1,0 +1,7 @@
+@@ -4,5 +4,5 @@
+ var _g1$ = _$createElement__r_custom("div");
+ var _g2$ = _$createElement__r_custom("span");
+ _$insertNode__r_custom(_g1$, _g2$);
+-_$insert__r_custom(_g2$, true);
++_$insert__r_custom(_g2$, 1 === 1);
+ const a = _g1$;

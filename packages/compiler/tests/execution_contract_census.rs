@@ -128,6 +128,157 @@ fn options(built_ins: Vec<String>) -> CompileOptions {
     }
 }
 
+/// The same options with reporting off — what `transform()` consumers get, and
+/// therefore what the output baseline pins.
+fn transform_options() -> CompileOptions {
+    CompileOptions {
+        semantic_trace: false,
+        ..options(vec!["For".into(), "Show".into()])
+    }
+}
+
+/// Every source the two reconciliation tests above compile, under stable ids.
+fn corpus_sources() -> Vec<(String, String)> {
+    fixture_sources()
+        .into_iter()
+        .map(|(id, source)| (format!("fixture/{id}"), source))
+        .chain(
+            probe_sources()
+                .into_iter()
+                .map(|(id, source)| (format!("probe/{id}"), source)),
+        )
+        .collect()
+}
+
+fn expected_baseline() -> std::collections::BTreeMap<&'static str, (bool, Vec<u8>)> {
+    include_str!("transform-output-baseline.txt")
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            let mut fields = line.split('\t');
+            let id = fields.next().expect("baseline id");
+            match fields.next().expect("baseline status") {
+                "reject" => (id, (false, Vec::new())),
+                "ok" => {
+                    let encoded = fields.next().expect("baseline output");
+                    let bytes = (0..encoded.len())
+                        .step_by(2)
+                        .map(|index| {
+                            u8::from_str_radix(&encoded[index..index + 2], 16)
+                                .expect("baseline hex")
+                        })
+                        .collect();
+                    (id, (true, bytes))
+                }
+                status => panic!("unknown baseline status {status:?}"),
+            }
+        })
+        .collect()
+}
+
+fn compare_output(id: &str, actual: &[u8], expected: &[u8]) -> Result<(), String> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "{id}: transform output differs from the checked-in baseline ({} vs {} bytes)",
+            actual.len(),
+            expected.len()
+        ))
+    }
+}
+
+/// `tracing_does_not_change_generated_output` only proves the two halves of one
+/// build agree; both can carry the same codegen regression. This is the
+/// byte-identity invariant that catches that: the checked-in bytes are
+/// generated from the branch point, so any transform change has to be named
+/// and regenerated deliberately rather than discovered later.
+#[test]
+fn transform_output_matches_checked_in_baseline() {
+    let expected = expected_baseline();
+    let sources = corpus_sources();
+    assert_eq!(sources.len(), expected.len(), "baseline corpus drifted");
+    let mut failures = Vec::new();
+    for (id, source) in sources {
+        let (compiled, expected_bytes) = expected
+            .get(id.as_str())
+            .unwrap_or_else(|| panic!("{id}: missing from the baseline"));
+        match compile(&source, &transform_options()) {
+            Ok(output) if *compiled => {
+                if let Err(error) = compare_output(&id, output.code.as_bytes(), expected_bytes) {
+                    failures.push(error);
+                }
+            }
+            Ok(_) => failures.push(format!("{id}: the baseline rejects this input")),
+            Err(_) if !compiled => {}
+            Err(error) => failures.push(format!("{id}: transform failed: {error}")),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} output mismatches:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// Rewrite `tests/transform-output-baseline.txt` from the current build.
+///
+/// The baseline is that invariant's only witness, so regenerating it is a
+/// deliberate act rather than a convenience: it is `#[ignore]`d so no ordinary
+/// run reaches it, and gated on an environment variable so `--include-ignored`
+/// cannot rewrite it as a side effect of running everything. Run it only after
+/// `transform_output_matches_checked_in_baseline` has named every entry that
+/// moves and every one of them is a change the branch intends:
+///
+/// ```sh
+/// UPDATE_TRANSFORM_BASELINE=1 cargo test --no-default-features \
+///   --test execution_contract_census regenerate_transform_output_baseline \
+///   -- --ignored --nocapture
+/// ```
+///
+/// Review the resulting diff line by line. An entry that moves for a reason
+/// the branch cannot explain is a codegen regression, not a stale baseline.
+#[test]
+#[ignore = "rewrites the checked-in transform baseline; see the doc comment"]
+fn regenerate_transform_output_baseline() {
+    assert!(
+        std::env::var_os("UPDATE_TRANSFORM_BASELINE").is_some(),
+        "set UPDATE_TRANSFORM_BASELINE=1 to rewrite the baseline"
+    );
+    let mut lines = String::new();
+    for (id, source) in corpus_sources() {
+        match compile(&source, &transform_options()) {
+            Ok(output) => {
+                let hex = output
+                    .code
+                    .as_bytes()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                lines.push_str(&format!("{id}\tok\t{hex}\n"));
+            }
+            Err(_) => lines.push_str(&format!("{id}\treject\n")),
+        }
+    }
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/transform-output-baseline.txt");
+    std::fs::write(&path, lines).expect("baseline is writable");
+    println!("rewrote {}", path.display());
+}
+
+/// The comparison has to be byte-exact, not "close enough": a single flipped
+/// bit in one entry must fail.
+#[test]
+fn output_baseline_rejects_a_one_byte_canary() {
+    let (_, (_, expected)) = expected_baseline()
+        .into_iter()
+        .find(|(_, (compiled, bytes))| *compiled && !bytes.is_empty())
+        .expect("baseline has a non-empty output");
+    let mut canary = expected.clone();
+    canary[0] ^= 1;
+    assert!(compare_output("one-byte canary", &canary, &expected).is_err());
+}
+
 #[test]
 fn every_fixture_reconciles_census_against_lowering() {
     let sources = fixture_sources();

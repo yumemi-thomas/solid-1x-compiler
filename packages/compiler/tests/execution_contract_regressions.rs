@@ -909,3 +909,293 @@ fn ordinary_component_children_are_not_control_flow_callbacks() {
     let rendered = trace(source);
     assert!(rendered.deferred_callback_sites.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// The `children` attribute's single slot.
+//
+// `transformAttributes` keeps one `children` local per element and pushes it
+// onto the child list at the end (`if (!hasChildren && children)`), so the
+// promotion is a property of every element rather than of template roots. The
+// census names a native `children` attribute on a childless element a
+// `jsx-child` wherever it sits, so before the nested lowering promoted the
+// value the site resolved as `elided` — a truthful record of what this
+// compiler emitted, and a false one about the program Babel compiles.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_nested_children_attribute_is_promoted_to_a_child_insert() {
+    let source = "const C = () => <div><span children={value()} /></div>;";
+    assert_eq!(
+        sites(source),
+        [(
+            "value()",
+            ExecutionSiteKind::JsxChild,
+            value(ValueDecision::ReactiveRerun)
+        )]
+    );
+    assert!(emitted(source).contains("_$insert"));
+}
+
+#[test]
+fn a_promoted_nested_children_value_records_the_insert_it_emits() {
+    let source = "const C = () => <div><span children={value()} /></div>;";
+    let rendered = trace(source);
+    let inserts = rendered
+        .owner_establishments
+        .iter()
+        .filter(|site| site.wrapper == "insert")
+        .map(|site| &source[site.span.start as usize..site.span.end as usize])
+        .collect::<Vec<_>>();
+    assert_eq!(inserts, ["value()"]);
+}
+
+#[test]
+fn a_void_element_children_attribute_is_pushed_but_never_visited() {
+    // `transformElement` guards the recursion with `if (!voidTag)`, so the
+    // slot Babel filled is never lowered. Nothing is emitted for it in either
+    // position, and the censused site says so.
+    for source in [
+        "const C = () => <br children={value()} />;",
+        "const C = () => <div><br children={value()} /></div>;",
+    ] {
+        assert_eq!(
+            sites(source),
+            [(
+                "value()",
+                ExecutionSiteKind::JsxChild,
+                value(ValueDecision::Elided)
+            )],
+            "{source}"
+        );
+        assert!(!emitted(source).contains("_$insert"), "{source}");
+    }
+}
+
+#[test]
+fn a_noscript_children_attribute_is_pushed_but_never_visited() {
+    // The same guard's second half: `if (tagName !== "noscript")`.
+    for source in [
+        "const C = () => <noscript children={value()} />;",
+        "const C = () => <div><noscript children={value()} /></div>;",
+    ] {
+        assert_eq!(
+            sites(source),
+            [(
+                "value()",
+                ExecutionSiteKind::JsxChild,
+                value(ValueDecision::Elided)
+            )],
+            "{source}"
+        );
+        assert!(!emitted(source).contains("_$insert"), "{source}");
+    }
+}
+
+#[test]
+fn a_later_dynamic_text_content_takes_the_slot_from_a_children_attribute() {
+    // Both write the one `children` local, and the attribute loop runs in
+    // source order: `children = t.jsxText(" ")` wins here, so the captured
+    // value is discarded and reported as such.
+    let source = "const C = () => <div><span children={value()} textContent={text()} /></div>;";
+    assert_eq!(
+        sites(source),
+        [
+            (
+                "value()",
+                ExecutionSiteKind::JsxChild,
+                value(ValueDecision::Elided)
+            ),
+            (
+                "text()",
+                ExecutionSiteKind::NativeAttribute,
+                value(ValueDecision::ReactiveRerun)
+            ),
+        ]
+    );
+    let emitted = emitted(source);
+    assert!(!emitted.contains("_$insert"));
+    assert!(emitted.contains("<div><span> "));
+}
+
+#[test]
+fn a_later_children_attribute_takes_the_slot_from_a_dynamic_text_content() {
+    let source = "const C = () => <div><span textContent={text()} children={value()} /></div>;";
+    assert_eq!(
+        sites(source),
+        [
+            (
+                "text()",
+                ExecutionSiteKind::NativeAttribute,
+                value(ValueDecision::ReactiveRerun)
+            ),
+            (
+                "value()",
+                ExecutionSiteKind::JsxChild,
+                value(ValueDecision::ReactiveRerun)
+            ),
+        ]
+    );
+    let emitted = emitted(source);
+    assert!(emitted.contains("_$insert"));
+    // No placeholder text node: the promoted child took the slot instead.
+    assert!(emitted.contains("<div><span>`"));
+}
+
+#[test]
+fn a_literal_text_content_never_competes_for_the_slot() {
+    // Only the dynamic branch writes `children`; a literal `textContent` is an
+    // ordinary `ChildProperties` assignment, so the promotion stands whatever
+    // the order.
+    for source in [
+        "const C = () => <div><span textContent=\"lit\" children={value()} /></div>;",
+        "const C = () => <div><span children={value()} textContent=\"lit\" /></div>;",
+    ] {
+        assert_eq!(
+            sites(source),
+            [(
+                "value()",
+                ExecutionSiteKind::JsxChild,
+                value(ValueDecision::ReactiveRerun)
+            )],
+            "{source}"
+        );
+        assert!(emitted(source).contains("_$insert"), "{source}");
+    }
+}
+
+#[test]
+fn a_trailing_literal_children_attribute_does_not_block_the_promotion() {
+    // Solid 1.x does not deduplicate attributes by name: a literal-valued
+    // `children` never reaches `children = value` at all, so it lands as a
+    // property write and leaves the earlier non-literal capture standing.
+    // Both are emitted.
+    let source = "const C = () => <div><span children={value()} children={\"s\"} /></div>;";
+    assert_eq!(
+        sites(source),
+        [(
+            "value()",
+            ExecutionSiteKind::JsxChild,
+            value(ValueDecision::ReactiveRerun)
+        )]
+    );
+    let emitted = emitted(source);
+    assert!(emitted.contains(".children = \"s\""));
+    assert!(emitted.contains("_$insert"));
+}
+
+#[test]
+fn a_constant_folded_children_attribute_does_not_block_the_promotion() {
+    // `evaluateAndInline` rewrites `{"a" + "b"}` to a string literal before the
+    // attribute loop runs, which puts it in exactly the case above. Judging the
+    // fold on the scan's *result* rather than on each candidate dropped the
+    // promotion entirely.
+    let source = "const C = () => <div children={value()} children={\"a\" + \"b\"} />;";
+    assert_eq!(
+        sites(source),
+        [
+            (
+                "value()",
+                ExecutionSiteKind::JsxChild,
+                value(ValueDecision::ReactiveRerun)
+            ),
+            // The surviving duplicate is written once as a property, which is
+            // what `eager-once` says; it is not dropped.
+            (
+                "\"a\" + \"b\"",
+                ExecutionSiteKind::JsxChild,
+                value(ValueDecision::EagerOnce)
+            ),
+        ]
+    );
+    let emitted = emitted(source);
+    assert!(emitted.contains(".children = \"ab\""));
+    assert!(emitted.contains("_$insert"));
+}
+
+#[test]
+fn source_children_still_shadow_a_nested_children_attribute() {
+    // Babel's `hasChildren` counts the raw child list, so a whitespace text
+    // node or a comment shadows the attribute as much as an element does.
+    // With a child list the census names the attribute what it is — a native
+    // attribute, not a JSX child — and lowering drops it there.
+    for source in [
+        "const C = () => <div><span children={value()}>text</span></div>;",
+        "const C = () => <div><span children={value()}>   </span></div>;",
+        "const C = () => <div><span children={value()}>{/* c */}</span></div>;",
+    ] {
+        assert_eq!(
+            sites(source),
+            [(
+                "value()",
+                ExecutionSiteKind::NativeAttribute,
+                value(ValueDecision::Elided)
+            )],
+            "{source}"
+        );
+        assert!(!emitted(source).contains("_$insert"), "{source}");
+    }
+}
+
+#[test]
+fn a_nested_spread_keeps_the_children_attribute_in_the_props_object() {
+    // `processSpreads` consumes it into the merged object as a getter, so it is
+    // never a child and the promotion must not claim it. Both positions report
+    // it identically, which is the point: the nested capture is gated on
+    // `!has_spread`, so this path is the one it was before.
+    for source in [
+        "const C = (p) => <div><span {...p} children={value()} /></div>;",
+        "const C = (p) => <div {...p} children={value()} />;",
+    ] {
+        assert_eq!(
+            sites(source),
+            [
+                (
+                    "p",
+                    ExecutionSiteKind::NativeSpread,
+                    value(ValueDecision::EagerOnce)
+                ),
+                (
+                    "value()",
+                    ExecutionSiteKind::JsxChild,
+                    value(ValueDecision::ReactiveRerun)
+                ),
+            ],
+            "{source}"
+        );
+        assert!(emitted(source).contains("get children()"), "{source}");
+    }
+}
+
+#[test]
+fn a_dynamic_text_content_keeps_real_children_in_the_template() {
+    // `hasChildren` blocks the placeholder push, so the element's own children
+    // still compile — the `firstChild` declaration and the effect are all the
+    // attribute contributes.
+    let source = "const C = () => <div><span textContent={text()}>hi</span></div>;";
+    assert_eq!(
+        sites(source),
+        [(
+            "text()",
+            ExecutionSiteKind::NativeAttribute,
+            value(ValueDecision::ReactiveRerun)
+        )]
+    );
+    assert!(emitted(source).contains("<div><span>hi`"));
+}
+
+#[test]
+fn a_literal_only_capture_is_dropped_without_falling_back_to_an_earlier_one() {
+    // Babel's capture keeps the last attribute that reaches `children = value`,
+    // and `{null}`/`{true}`/`{{ a: 1 }}` all reach it. This compiler does not
+    // lower such a value (Babel inserts it — a divergence recorded in
+    // docs/execution-contract.md), but it must drop it rather than promote the
+    // *earlier* `children` attribute Babel's own capture already discarded:
+    // that would insert a value Babel never inserts.
+    for source in [
+        "const C = () => <div children={value()} children={null} />;",
+        "const C = () => <div><span children={value()} children={true} /></div>;",
+        "const C = () => <div><span children={value()} children={{ a: 1 }} /></div>;",
+    ] {
+        assert!(!emitted(source).contains("_$insert"), "{source}");
+    }
+}
