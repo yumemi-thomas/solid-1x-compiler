@@ -872,6 +872,53 @@ impl TraceRecorder {
         }
     }
 
+    /// Withdraw every censused site *inside* a source range whose lowering the
+    /// emitter skipped wholesale.
+    ///
+    /// Reached when a lowering path discards a whole subtree rather than
+    /// deciding it value by value: the `<noscript>` static-template fast path,
+    /// which emits the tag and never visits its children, and the hydratable
+    /// `<head>` paths, which replace the entire element with a `NoHydration`
+    /// component call. Nothing in the range is emitted, so no site there exists
+    /// to decide; retracting is the truthful outcome, and the alternative is a
+    /// file-wide "unresolved execution sites" failure over expressions that
+    /// never run.
+    ///
+    /// Containment is **strict**, the same rule the census's own `dropped`
+    /// predicate applies: the discarded node is still a site of its own
+    /// wherever its *parent's* lowering decided it — a `<head>` handed to a
+    /// component as a child is a `component-child` the getter really does
+    /// carry — and only what is nested inside it stops existing. That also
+    /// makes the call order-independent, where an inclusive range would
+    /// silently depend on whether the parent recorded its decision before or
+    /// after the discarding path ran.
+    ///
+    /// A site already decided is kept, matching [`Self::retract`]: this only
+    /// removes sites nothing has spoken for.
+    ///
+    /// The invariant this relies on: any path that later re-lowers a range
+    /// once retracted here must also re-discard it, rather than deciding a
+    /// site inside it. A violation is not silent — the site is gone from the
+    /// census, so a decision that reaches it anyway fails closed loudly at
+    /// the uncensused-site check in `resolve`.
+    pub(crate) fn retract_within(&mut self, span: Span) {
+        if !self.is_recording() {
+            return;
+        }
+        let Self {
+            census, decisions, ..
+        } = self;
+        let Some(census) = census.as_mut() else {
+            return;
+        };
+        census.sites.retain(|site| {
+            decisions.contains_key(site)
+                || site.span.start < span.start
+                || site.span.end > span.end
+                || (site.span.start, site.span.end) == (span.start, span.end)
+        });
+    }
+
     pub(crate) fn value(&mut self, span: Span, kind: ExecutionSiteKind, decision: ValueDecision) {
         self.resolve(span, kind, TerminalDecision::Value(decision));
     }

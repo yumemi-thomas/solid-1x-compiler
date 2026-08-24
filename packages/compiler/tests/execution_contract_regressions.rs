@@ -23,6 +23,15 @@
 //! generated output is the same byte-for-byte as before them; a snapshot that
 //! moves means the repair went into lowering, which would be a Babel parity
 //! break.
+//!
+//! Since then a third family joined them, in the other direction: shapes where
+//! a lowering path discards a whole subtree *unvisited*, so the censused sites
+//! inside it were never resolved and reconciliation failed the whole file. Those
+//! are pinned under "discarded subtrees" below, each against the sibling and
+//! keep-cases that make the retraction a claim about that one path rather than a
+//! blanket relaxation. Those fixes are lowering-observation-only — the recorder
+//! withdraws sites the emitter proved absent — so the emitted code is again
+//! byte-identical.
 
 use dom_expressions_compiler::{
     compile, CallbackDecision, CompileOptions, ExecutionSiteKind, SemanticTrace, TerminalDecision,
@@ -90,6 +99,43 @@ fn value(decision: ValueDecision) -> TerminalDecision {
 fn emitted(source: &str) -> String {
     let untraced = compile(source, &options(false)).expect("compiles").code;
     let traced = compile(source, &options(true)).expect("compiles").code;
+    assert_eq!(untraced, traced, "tracing changed the emitted code");
+    untraced
+}
+
+/// `hydratable` selects a different lowering for `<head>`, so the shapes that
+/// turn on it need their own option set.
+fn hydratable_options(semantic_trace: bool) -> CompileOptions {
+    CompileOptions {
+        hydratable: true,
+        ..options(semantic_trace)
+    }
+}
+
+fn hydratable_sites(source: &str) -> Vec<(&str, ExecutionSiteKind, TerminalDecision)> {
+    compile(source, &hydratable_options(true))
+        .unwrap_or_else(|error| panic!("{error}"))
+        .semantic_trace
+        .expect("tracing was requested")
+        .sites
+        .into_iter()
+        .map(|site| {
+            (
+                &source[site.span.start as usize..site.span.end as usize],
+                site.kind,
+                site.decision,
+            )
+        })
+        .collect()
+}
+
+fn hydratable_emitted(source: &str) -> String {
+    let untraced = compile(source, &hydratable_options(false))
+        .expect("compiles")
+        .code;
+    let traced = compile(source, &hydratable_options(true))
+        .expect("compiles")
+        .code;
     assert_eq!(untraced, traced, "tracing changed the emitted code");
     untraced
 }
@@ -1198,4 +1244,238 @@ fn a_literal_only_capture_is_dropped_without_falling_back_to_an_earlier_one() {
     ] {
         assert!(!emitted(source).contains("_$insert"), "{source}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Discarded subtrees: a lowering path that skips a whole subtree unvisited.
+//
+// Three paths in the DOM lowering do this, and each used to leave every
+// censused site inside the skipped range unresolved — which fails the *file*,
+// not the shape: a tsc-clean source became unanalysable for a consumer.
+// `TraceRecorder::retract_within` withdraws them instead, because nothing was
+// emitted for them and so there is nothing to decide. The three:
+//
+// 1. the `<noscript>` static-template fast path (`dom/static_template.rs`),
+//    which emits the tag and returns without visiting the children;
+// 2. a hydratable `<head>` that is the direct child of a native element
+//    (`dom/children.rs`), replaced by a bare `NoHydration` call;
+// 3. a hydratable `<head>` reaching `lower_element` in any other *dynamic*
+//    position (`dom/element.rs`), same replacement.
+//
+// (1) is exact Babel parity in all four dom modes — Babel guards its child
+// recursion with `if (tagName !== "noscript") transformChildren(...)`. (2)
+// and (3) are markup-only against Babel, not execution divergences: when the
+// head has dynamic content, Babel's `transformElement` returns early for a
+// top-level `<head>` (exact parity there) but for a nested one it is the
+// *parent's* `transformChildren` that keeps the markup and pushes this same
+// `createComponent(NoHydration, {})` call — not an insert — so the same call
+// runs in both compilers either way. See docs/execution-contract.md
+// divergence 9 for the one sub-case that *is* an execution divergence: a
+// literal (non-dynamic) `<head>` reached directly by (2) or (3) still gets
+// replaced here, while Babel's gate for that push never fires and emits
+// nothing at all. A `<head>` folded into an ancestor's markup by the static
+// fast path reaches none of these three paths and needs no retraction: it has
+// nothing dynamic inside it, so nothing inside it was ever a censused site.
+//
+// The keep-cases below are the other half: every `<noscript>` position whose
+// children this compiler really does lower keeps its sites, even where that
+// disagrees with Babel. Retraction must be a claim about a discarding path,
+// not about a tag name.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_discarded_noscript_child_list_retracts_its_sites() {
+    // The static fast path never visits these children, and neither does
+    // Babel. Every censused site inside the subtree goes with them, whatever
+    // kind it is — including a `ref` and a handler nested one element deeper,
+    // which are the shapes that prove the retraction is a range and not a
+    // per-child-expression patch.
+    for source in [
+        "const C = () => <div><noscript>{value()}</noscript></div>;",
+        "const C = () => <div><noscript id=\"d\">{value()}</noscript></div>;",
+        "const C = () => <div><noscript>{value()}text{other()}</noscript></div>;",
+        "const C = () => <div><noscript><span>{value()}</span></noscript></div>;",
+        "const C = () => <div><noscript><span ref={r}>s</span></noscript></div>;",
+        "const C = () => <div><noscript><span onClick={h}>s</span></noscript></div>;",
+        "const C = () => <div><noscript><Comp x={value()} /></noscript></div>;",
+        "const C = () => <div><noscript>{...items}</noscript></div>;",
+        "const C = () => <div><p><noscript>{value()}</noscript></p></div>;",
+        "const C = () => <div><noscript><noscript>{value()}</noscript></noscript></div>;",
+    ] {
+        assert_eq!(hydratable_sites(source), [], "{source}");
+        assert_eq!(sites(source), [], "{source}");
+        // Nothing from the subtree reaches the output either: no insert, no
+        // event delegation, no ref application.
+        let code = emitted(source);
+        for absent in ["_$insert", "_$use", "_$delegateEvents", "_$createComponent"] {
+            assert!(!code.contains(absent), "{source} still emits {absent}");
+        }
+    }
+}
+
+#[test]
+fn a_discarded_noscript_leaves_its_siblings_sites_intact() {
+    // Retraction is scoped to the discarded range. A sibling on either side of
+    // the `<noscript>` is lowered normally and must still be reported.
+    let source = "const C = () => <div>{before()}<noscript>{gone()}</noscript>{after()}</div>;";
+    assert_eq!(
+        sites(source),
+        [
+            (
+                "before()",
+                ExecutionSiteKind::JsxChild,
+                value(ValueDecision::ReactiveRerun)
+            ),
+            (
+                "after()",
+                ExecutionSiteKind::JsxChild,
+                value(ValueDecision::ReactiveRerun)
+            ),
+        ]
+    );
+    assert_eq!(hydratable_sites(source), sites(source));
+}
+
+#[test]
+fn a_noscript_this_compiler_does_lower_keeps_its_sites() {
+    // The two positions the static fast path does not own. Both diverge from
+    // Babel, which emits nothing for either; the trace stays truthful about
+    // *this* compiler, so the sites stay and carry the decision the emitted
+    // code really implements.
+    //
+    // A `<noscript>` template root:
+    let root = "const C = () => <noscript>{value()}</noscript>;";
+    assert_eq!(
+        sites(root),
+        [(
+            "value()",
+            ExecutionSiteKind::JsxChild,
+            value(ValueDecision::ReactiveRerun)
+        )]
+    );
+    assert!(emitted(root).contains("_$insert"));
+
+    // A nested `<noscript>` whose attributes push it onto the dynamic path:
+    for source in [
+        "const C = () => <div><noscript class={cls()}>{value()}</noscript></div>;",
+        "const C = () => <div><noscript ref={r}>{value()}</noscript></div>;",
+        "const C = () => <div><noscript onClick={h}>{value()}</noscript></div>;",
+    ] {
+        assert!(
+            sites(source).contains(&(
+                "value()",
+                ExecutionSiteKind::JsxChild,
+                value(ValueDecision::ReactiveRerun)
+            )),
+            "{source}"
+        );
+        assert!(emitted(source).contains("_$insert"), "{source}");
+    }
+}
+
+#[test]
+fn a_hydratable_head_retracts_the_sites_inside_it() {
+    // The element becomes `createComponent(NoHydration, {})` and nothing else:
+    // its attributes are never lowered either, so a `ref` or handler written
+    // on the `<head>` itself is retracted alongside its children.
+    for source in [
+        "const C = () => <head>{value()}</head>;",
+        "const C = () => <head ref={r}>{value()}</head>;",
+        "const C = () => <head onClick={h}>s</head>;",
+        "const C = () => <head><span>{value()}</span></head>;",
+        "const C = () => <div><head>{value()}</head></div>;",
+        "const C = () => <div><head ref={r} onClick={h}>{value()}</head></div>;",
+        "const C = () => <div><p><head><span ref={r}>s</span></head></p></div>;",
+        "const C = () => <html><head>{value()}</head></html>;",
+    ] {
+        assert_eq!(hydratable_sites(source), [], "{source}");
+        let code = hydratable_emitted(source);
+        assert!(code.contains("_$NoHydration"), "{source}");
+        for absent in ["_$insert", "_$use", "_$delegateEvents"] {
+            assert!(!code.contains(absent), "{source} still emits {absent}");
+        }
+    }
+}
+
+#[test]
+fn a_hydratable_head_leaves_its_siblings_and_its_own_child_site_intact() {
+    // Two boundaries at once. A sibling of the `<head>` is lowered normally,
+    // and — the reason `retract_within` is strict rather than inclusive — a
+    // site spanned at the `<head>` element *itself* belongs to the parent
+    // lowering that decided it, not to the discarded interior. A component
+    // child really is handed to the caller's getter; what the getter evaluates
+    // to is the `NoHydration` call.
+    let sibling = "const C = () => <div><head>{gone()}</head>{after()}</div>;";
+    assert_eq!(
+        hydratable_sites(sibling),
+        [(
+            "after()",
+            ExecutionSiteKind::JsxChild,
+            value(ValueDecision::ReactiveRerun)
+        )]
+    );
+
+    let component_child = "const C = () => <Comp>{<head>{gone()}</head>}</Comp>;";
+    assert_eq!(
+        hydratable_sites(component_child),
+        [(
+            "<head>{gone()}</head>",
+            ExecutionSiteKind::ComponentChild,
+            value(ValueDecision::CallerContext)
+        )]
+    );
+
+    // The same boundary for the two other positions that span a site at the
+    // JSX element itself: a JSX-valued fragment hole, and a conditional branch
+    // whose enclosing site is the whole ternary. Both are inserted, so both
+    // keep a decision — of the discarded `<head>`, only its interior goes.
+    assert_eq!(
+        hydratable_sites("const C = () => <>{<head>{gone()}</head>}</>;"),
+        [(
+            "<head>{gone()}</head>",
+            ExecutionSiteKind::JsxChild,
+            value(ValueDecision::ReactiveRerun)
+        )]
+    );
+    assert_eq!(
+        hydratable_sites("const C = () => <div>{cond() ? <head>{gone()}</head> : null}</div>;"),
+        [(
+            "cond() ? <head>{gone()}</head> : null",
+            ExecutionSiteKind::JsxChild,
+            value(ValueDecision::ReactiveRerun)
+        )]
+    );
+}
+
+#[test]
+fn a_non_hydratable_head_keeps_lowering_its_children() {
+    // The `<head>` replacement is hydratable-only. Without it the element is an
+    // ordinary native root, so its children lower and their sites stand.
+    let source = "const C = () => <head>{value()}</head>;";
+    assert_eq!(
+        sites(source),
+        [(
+            "value()",
+            ExecutionSiteKind::JsxChild,
+            value(ValueDecision::ReactiveRerun)
+        )]
+    );
+    assert!(emitted(source).contains("_$insert"));
+}
+
+#[test]
+fn retraction_does_not_reach_a_decided_site() {
+    // The guard that keeps retraction from being a way to *lose* a decision:
+    // a site something already spoke for survives. `<html>` is lowered
+    // normally under `hydratable`, so its non-`<head>` children keep their
+    // sites while the `<head>` beside them is discarded.
+    let source = "const C = () => <html><head>{gone()}</head><body>{kept()}</body></html>;";
+    assert_eq!(
+        hydratable_sites(source),
+        [(
+            "kept()",
+            ExecutionSiteKind::JsxChild,
+            value(ValueDecision::ReactiveRerun)
+        )]
+    );
 }

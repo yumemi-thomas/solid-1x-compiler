@@ -32,7 +32,9 @@ as valid JavaScript matches. `expected-probes/` holds 64 recorded probe
 divergences — nine in the `children`-attribute family, two void/`<noscript>`
 general-children shapes, and two `textContent`-placeholder shapes — each one
 enumerated in [docs/execution-contract.md](docs/execution-contract.md); they
-arrived with the probes that measure them, not from a regression. Reference
+arrived with the probes that measure them, not from a regression. That document
+also records two further divergences measured against the same oracle but not
+yet in the probe corpus, and says what pinning each would cost. Reference
 failures are enumerated explicitly in the tests, so a fixed or newly broken
 Babel case cannot silently change the comparison set.
 

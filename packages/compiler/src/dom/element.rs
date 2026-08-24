@@ -222,6 +222,15 @@ impl<'a, 'source> AstDomTransform<'a, 'source> {
 
         let tag_name = element_name(&element.opening_element.name)?;
         if self.hydratable && tag_name == "head" {
+            // Babel's `transformElement` returns here too, before
+            // `transformAttributes` and the child recursion, so neither
+            // compiler lowers anything inside the element (exact parity in all
+            // four dom modes for a root `<head>{b()}</head>`). Withdraw the
+            // censused sites inside it: the element becomes a bare
+            // `NoHydration` call, so nothing there executes to decide about.
+            // The element's own span is left alone — where a parent lowering
+            // decided the `<head>` as a child of its own, that decision stands.
+            self.retract_discarded_element_sites(element);
             self.template_state.uses_create_component = true;
             if !self
                 .template_state
