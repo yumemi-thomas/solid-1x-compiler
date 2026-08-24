@@ -895,6 +895,12 @@ impl TraceRecorder {
     ///
     /// A site already decided is kept, matching [`Self::retract`]: this only
     /// removes sites nothing has spoken for.
+    ///
+    /// The invariant this relies on: any path that later re-lowers a range
+    /// once retracted here must also re-discard it, rather than deciding a
+    /// site inside it. A violation is not silent — the site is gone from the
+    /// census, so a decision that reaches it anyway fails closed loudly at
+    /// the uncensused-site check in `resolve`.
     pub(crate) fn retract_within(&mut self, span: Span) {
         if !self.is_recording() {
             return;

@@ -1259,15 +1259,23 @@ fn a_literal_only_capture_is_dropped_without_falling_back_to_an_earlier_one() {
 //    which emits the tag and returns without visiting the children;
 // 2. a hydratable `<head>` that is the direct child of a native element
 //    (`dom/children.rs`), replaced by a bare `NoHydration` call;
-// 3. a hydratable `<head>` reaching `lower_element` in any other position
-//    (`dom/element.rs`), same replacement.
+// 3. a hydratable `<head>` reaching `lower_element` in any other *dynamic*
+//    position (`dom/element.rs`), same replacement.
 //
-// (1) and (3) are exact Babel parity in all four dom modes — Babel guards its
-// child recursion with `if (tagName !== "noscript") transformChildren(...)`,
-// and returns from `transformElement` before `transformAttributes` for a
-// top-level hydratable `<head>`. (2) is a divergence in what is *emitted*
-// (Babel keeps the subtree's markup and inserts); the trace reports this
-// compiler faithfully either way, which is the point of the contract.
+// (1) is exact Babel parity in all four dom modes — Babel guards its child
+// recursion with `if (tagName !== "noscript") transformChildren(...)`. (2)
+// and (3) are markup-only against Babel, not execution divergences: when the
+// head has dynamic content, Babel's `transformElement` returns early for a
+// top-level `<head>` (exact parity there) but for a nested one it is the
+// *parent's* `transformChildren` that keeps the markup and pushes this same
+// `createComponent(NoHydration, {})` call — not an insert — so the same call
+// runs in both compilers either way. See docs/execution-contract.md
+// divergence 9 for the one sub-case that *is* an execution divergence: a
+// literal (non-dynamic) `<head>` reached directly by (2) or (3) still gets
+// replaced here, while Babel's gate for that push never fires and emits
+// nothing at all. A `<head>` folded into an ancestor's markup by the static
+// fast path reaches none of these three paths and needs no retraction: it has
+// nothing dynamic inside it, so nothing inside it was ever a censused site.
 //
 // The keep-cases below are the other half: every `<noscript>` position whose
 // children this compiler really does lower keeps its sites, even where that

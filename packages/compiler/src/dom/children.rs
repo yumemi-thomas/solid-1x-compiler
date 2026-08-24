@@ -166,9 +166,11 @@ impl<'a> AstDomTransform<'a, '_> {
                         // of it reaches the template either. Withdraw the
                         // censused sites inside it — a `ref` or handler on the
                         // `<head>` itself included — since no code exists to
-                        // decide about. (Babel keeps this subtree's markup and
-                        // inserts, so this is a divergence in what is emitted;
-                        // the trace reports this compiler faithfully. See
+                        // decide about. (Babel keeps this subtree's markup, but
+                        // when the head has dynamic content it pushes this same
+                        // `createComponent(NoHydration, {})` call into the
+                        // parent's exprs — not an insert; markup is the only
+                        // divergence, execution is parity-clean. See
                         // docs/execution-contract.md.)
                         self.retract_discarded_element_sites(child);
                         index += 1;
