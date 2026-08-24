@@ -161,6 +161,16 @@ impl<'a> AstDomTransform<'a, '_> {
                             ],
                         );
                         operations.push(self.ast().statement_expression(child.span, call));
+                        // The element is replaced outright: neither its
+                        // attributes nor its children are lowered, and nothing
+                        // of it reaches the template either. Withdraw the
+                        // censused sites inside it — a `ref` or handler on the
+                        // `<head>` itself included — since no code exists to
+                        // decide about. (Babel keeps this subtree's markup and
+                        // inserts, so this is a divergence in what is emitted;
+                        // the trace reports this compiler faithfully. See
+                        // docs/execution-contract.md.)
+                        self.retract_discarded_element_sites(child);
                         index += 1;
                         continue;
                     }
@@ -859,6 +869,34 @@ impl<'a> AstDomTransform<'a, '_> {
             self.ast()
                 .expression_string_literal(child.span, self.ast().atom(&tag_name), None);
         Ok(self.call_identifier(child.span, "_$getNextMatch", vec![base, tag]))
+    }
+
+    /// Withdraw the censused execution sites of a child list this lowering
+    /// discards without visiting. The children occupy one contiguous source
+    /// range, so every site inside it belongs to the discarded subtree.
+    ///
+    /// The range is only ever *strictly* larger than the sites inside it:
+    /// a lone expression or spread child's site is its expression, inside the
+    /// braces, and a lone element child under a native parent is no site at
+    /// all — so `retract_within`'s strict containment loses nothing here.
+    pub(crate) fn retract_children_sites(&mut self, children: &[JSXChild<'a>]) {
+        let Some(first) = children.first() else {
+            return;
+        };
+        let last = children
+            .last()
+            .expect("a non-empty child list has a last child");
+        self.semantic_trace
+            .retract_within(oxc_span::Span::new(first.span().start, last.span().end));
+    }
+
+    /// Withdraw the censused execution sites inside a whole element the
+    /// lowering replaces rather than compiles — the hydratable `<head>`, which
+    /// becomes a bare `NoHydration` component call. Its attributes go
+    /// unlowered along with its children, so the span is the element's, not
+    /// its child list's.
+    pub(crate) fn retract_discarded_element_sites(&mut self, element: &JSXElement<'a>) {
+        self.semantic_trace.retract_within(element.span);
     }
 
     #[allow(clippy::too_many_arguments)]

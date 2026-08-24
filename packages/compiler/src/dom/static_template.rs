@@ -36,6 +36,23 @@ pub(crate) fn lower_static_native_template<'a>(
     template.push_both(">");
 
     if tag_name == "noscript" {
+        // `<noscript>` markup is inert, so this path emits the tag and returns
+        // without visiting the children at all. Babel drops them too — its
+        // `transformElement` guards the recursion with
+        // `if (tagName !== "noscript") transformChildren(...)`, ungated on the
+        // element's position — so retracting their censused sites is
+        // parity-clean: nothing is emitted for them, so there is nothing to
+        // decide. (Measured against the oracle in all four dom modes for
+        // `<div><noscript>{b()}</noscript></div>` and for a `ref` nested in the
+        // discarded subtree; both are exact parity.)
+        //
+        // The two `<noscript>` positions this path does *not* cover keep their
+        // sites, because there this compiler really does lower the children:
+        // a `<noscript>` template root, and a nested `<noscript>` whose
+        // attributes push it onto the dynamic path. Both are divergences from
+        // Babel, recorded in docs/execution-contract.md rather than repaired
+        // by a trace that under-reports what this compiler emits.
+        ctx.retract_children_sites(&element.children);
         if ctx.should_close_tag(&tag_name, close_context.clone()) {
             template.html.push_str(&format!("</{tag_name}>"));
         }
