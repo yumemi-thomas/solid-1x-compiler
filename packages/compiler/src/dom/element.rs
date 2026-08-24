@@ -258,26 +258,28 @@ impl<'a, 'source> AstDomTransform<'a, 'source> {
         // no real children, the value becomes its child expression; when it
         // does, the attribute is dropped.
         //
-        // "Non-literal" is judged after constant folding, because that is the
-        // order Babel runs in: its fold rewrites every attribute value before
-        // the `children` capture ever sees it, so a value that folds to a
-        // string or number is a literal there and lowers as a `children`
-        // property write. Judging the raw AST here instead promoted the value
-        // AND left the attribute plan alive — the same value emitted twice,
-        // and two trace decisions colliding over one censused site.
+        // `promoted_children_attribute` owns which `children` attribute the
+        // slot ends up holding and why. What is decided here is only whether
+        // that value is ever *visited*: Babel pushes it onto the child list in
+        // `transformAttributes` and then guards the recursion with
+        // `if (!voidTag) { … if (tagName !== "noscript") transformChildren(…) }`,
+        // so a void element's or a `<noscript>`'s promoted value emits nothing
+        // at all. Without those two gates `<br children={x()}/>` emitted an
+        // `_$insert` Babel does not.
+        //
+        // The gates cover the promotion only. A void or `<noscript>` template
+        // root still lowers its *source* children here, which Babel also
+        // discards — divergence 2 in docs/execution-contract.md.
         let attribute_child =
             (element.children.is_empty()
+                && !crate::shared::utils::is_void_element(&tag_name)
+                && tag_name != "noscript"
                 && !element.opening_element.attributes.iter().any(|attr| {
                     matches!(attr, oxc_ast::ast::JSXAttributeItem::SpreadAttribute(_))
                 }))
-            .then(|| children_attribute_container(element))
+            .then(|| self.promoted_children_attribute(element))
             .flatten()
-            .filter(|container| {
-                container
-                    .expression
-                    .as_expression()
-                    .is_none_or(|expression| self.evaluate_confident(expression).is_none())
-            });
+            .map(|(_, container)| container);
         // Which `children` value was promoted, so the attribute loop can tell
         // it apart from sibling `children` attributes the promotion dropped.
         let promoted_children_span = attribute_child.map(|container| container.expression.span());
@@ -324,7 +326,7 @@ impl<'a, 'source> AstDomTransform<'a, 'source> {
         );
         self.skip_xmlns_attribute = saved_skip_xmlns;
         let attrs_lowering = attribute_result?;
-        let needs_text_placeholder = attrs_lowering.needs_text_placeholder;
+        let needs_text_placeholder = attrs_lowering.text_placeholder.is_some();
 
         // Babel's textarea `value` fold replaces the element's children
         // (`path.node.children = [child]`).
@@ -605,21 +607,13 @@ fn xmlns_attribute_value(element: &JSXElement<'_>) -> Option<String> {
     })
 }
 
-/// Matches the Babel plugin's `children`-attribute capture: the last
-/// `children` attribute with a non-literal expression container value is
-/// treated as element children (insert), not as an attribute or property.
-pub(crate) fn children_attribute_container<'e, 'a>(
-    element: &'e JSXElement<'a>,
-) -> Option<&'e oxc_ast::ast::JSXExpressionContainer<'a>> {
-    element
-        .opening_element
-        .attributes
-        .iter()
-        .rev()
-        .find_map(|attr| children_attribute_container_from_item(attr))
-}
-
-pub(crate) fn children_attribute_container_from_item<'e, 'a>(
+/// Whether this attribute is a `children` attribute whose value reaches Babel's
+/// capture — the attribute loop's own gate, which is
+/// `t.isJSXExpressionContainer(value) && !(t.isStringLiteral(value.expression)
+/// || t.isNumericLiteral(value.expression))`. A string- or number-valued
+/// `children` is an ordinary `ChildProperties` write and never touches the
+/// slot; every other container value does.
+fn children_attribute_container_from_item<'e, 'a>(
     attr: &'e oxc_ast::ast::JSXAttributeItem<'a>,
 ) -> Option<&'e oxc_ast::ast::JSXExpressionContainer<'a>> {
     let oxc_ast::ast::JSXAttributeItem::Attribute(attr) = attr else {
@@ -638,7 +632,6 @@ pub(crate) fn children_attribute_container_from_item<'e, 'a>(
         container.expression,
         JSXExpression::StringLiteral(_)
             | JSXExpression::NumericLiteral(_)
-            | JSXExpression::BooleanLiteral(_)
             | JSXExpression::EmptyExpression(_)
     ) {
         return None;
@@ -651,6 +644,82 @@ pub(crate) fn jsx_expression_to_expression<'a>(
     allocator: &'a Allocator,
 ) -> Expression<'a> {
     expression.clone_in(allocator).into_expression()
+}
+
+impl<'a> AstDomTransform<'a, '_> {
+    /// The `children` attribute that holds Babel's single `children` slot when
+    /// the attribute loop finishes, with its index in the attribute list.
+    ///
+    /// Solid 1.x's plugin does not deduplicate attributes by name (the
+    /// `dedupe_attributes` shim is deliberately the identity here): every
+    /// attribute is visited in source order, and only the ones that reach
+    /// `else if (key === "children") children = value` write the slot. That
+    /// branch sits behind
+    /// `t.isJSXExpressionContainer(value) && !(isStringLiteral || isNumericLiteral)`,
+    /// so a literal-valued `children` never touches the slot at all — it falls
+    /// through to the `ChildProperties` write (`_el$.children = "s"`) and
+    /// leaves an *earlier* non-literal `children` as the promoted value.
+    /// `<div children={x()} children={"s"}/>` therefore emits both, which is
+    /// why the scan must keep looking past a literal rather than stop at the
+    /// last attribute named `children`.
+    ///
+    /// Literal-ness is judged after constant folding, because `transformElement`
+    /// runs `evaluateAndInline` over every attribute value before the loop:
+    /// `children={"a" + "b"}` is already a string literal by the time the
+    /// capture could see it. Applying that filter to the scan's *result*
+    /// instead of to each candidate is what made
+    /// `<div children={x()} children={"a" + "b"}/>` drop the promotion
+    /// entirely.
+    ///
+    /// The index is returned because the slot has a second writer — a dynamic
+    /// `textContent` — and which one survives depends on their relative source
+    /// position; see [`AttrsLowering::text_placeholder`].
+    ///
+    /// Selection and lowerability are two separate steps here, and the order
+    /// matters. The scan stops at the attribute *Babel's* capture keeps, then
+    /// asks whether this compiler lowers that value; it never falls back to an
+    /// earlier `children` attribute, because Babel's own capture already
+    /// overwrote the slot with the later one. Falling back turned
+    /// `<div children={x()} children={null}/>` — where Babel inserts `null` —
+    /// into an insert of `x()`, which is worse than the missing insert it
+    /// replaced. A confidently-folded non-text value (`null`, `undefined`, a
+    /// boolean, a confident object literal) is such a capture: it is selected
+    /// and then dropped, which is divergence 3 in docs/execution-contract.md,
+    /// not a reason to promote a different value.
+    pub(crate) fn promoted_children_attribute<'e>(
+        &self,
+        element: &'e JSXElement<'a>,
+    ) -> Option<(usize, &'e oxc_ast::ast::JSXExpressionContainer<'a>)> {
+        let (index, container) = element
+            .opening_element
+            .attributes
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, attr)| {
+                let container = children_attribute_container_from_item(attr)?;
+                // `evaluateAndInline` has already rewritten a foldable value to
+                // a literal by the time Babel's gate above sees it, so a value
+                // that folds to a string or number is one of those literals.
+                let folds_to_text =
+                    container
+                        .expression
+                        .as_expression()
+                        .is_some_and(|expression| {
+                            matches!(
+                                self.evaluate_confident(expression),
+                                Some(crate::shared::attr_plan::ConfidentValue::Str(_))
+                                    | Some(crate::shared::attr_plan::ConfidentValue::Num(_))
+                            )
+                        });
+                (!folds_to_text).then_some((index, container))
+            })?;
+        container
+            .expression
+            .as_expression()
+            .is_none_or(|expression| self.evaluate_confident(expression).is_none())
+            .then_some((index, container))
+    }
 }
 
 impl<'a> AstDomTransform<'a, '_> {

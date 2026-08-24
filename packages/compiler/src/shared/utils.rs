@@ -33,9 +33,28 @@ pub(crate) fn element_name(name: &JSXElementName<'_>) -> Result<String> {
     }
 }
 
-/// Resolves duplicate attributes the way the Babel plugin does when no spread
-/// is present: the last occurrence of a name wins (earlier ones are dropped),
-/// except `ref` which may appear multiple times. Spreads disable deduping.
+/// Identity function, deliberately: Solid 1.x's Babel plugin does not
+/// deduplicate attributes at all. Every attribute is visited in source order,
+/// and a duplicate name is not dropped — each occurrence still runs its own
+/// codegen. `<div id={a1()} id={b1()}/>` emits *both* `setAttribute` writes,
+/// one per occurrence in an ordered effect (verified against the vendored
+/// Babel plugin); there is no earlier-wins-or-loses step to port here at all.
+///
+/// This is the inverse of the 2.0 fork, which *does* dedupe: it collapses to
+/// the last occurrence of each name first, and only then runs the rest of its
+/// attribute pipeline over the collapsed set. Porting either compiler's rule
+/// onto the other breaks it — 1.x has no dedup pass to add a "spreads disable
+/// it" carve-out to, and 2.0's dedup-then-filter order cannot be replaced with
+/// this identity without changing which value survives a duplicate.
+///
+/// This has nothing to do with the `children` attribute's own selection rule
+/// elsewhere in this file's callers: that is "the last attribute Babel's own
+/// `children` capture keeps" (a scan over the *undeduplicated* list, looking
+/// for the branch that runs `children = value`), never "the last attribute
+/// literally named `children`". See
+/// [`AstDomTransform::promoted_children_attribute`] in `dom/element.rs` for
+/// why those two are not the same thing and where a literal-valued `children`
+/// is passed over.
 pub(crate) fn dedupe_attributes<'a, 'b>(
     attributes: &'b [JSXAttributeItem<'a>],
 ) -> std::vec::Vec<&'b JSXAttributeItem<'a>> {

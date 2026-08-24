@@ -49,9 +49,20 @@ enum PlanDisposition {
 
 /// Outcome of lowering an element's attributes.
 pub(crate) struct AttrsLowering<'a> {
-    /// Dynamic `textContent` needs the single-space placeholder child
-    /// appended to the template.
-    pub(crate) needs_text_placeholder: bool,
+    /// The attribute span of the last dynamic `textContent` on this element,
+    /// which needs the single-space placeholder child appended to the
+    /// template. `None` when no attribute claimed the placeholder.
+    ///
+    /// A span rather than a flag because Babel's dynamic `textContent` and a
+    /// `children` attribute write the *same* `children` slot
+    /// (`children = t.jsxText(" ")` against `children = value`), and the
+    /// attribute loop runs in source order, so which one survives to
+    /// `path.node.children.push(children)` is decided by which is written
+    /// later. Only a `textContent` that took the dynamic branch writes the
+    /// slot — a literal one is an ordinary `ChildProperties` assignment — so
+    /// the position has to come from lowering rather than from the attribute
+    /// list.
+    pub(crate) text_placeholder: Option<Span>,
     /// Babel's textarea `value` fold replaced the element's children with
     /// this single synthesized child.
     pub(crate) children_replacement: Option<oxc_ast::ast::JSXChild<'a>>,
@@ -143,7 +154,7 @@ impl<'a> AstDomTransform<'a, '_> {
         } = self.plan_attributes(planned_attributes, tag_name, nested_native_child)?;
         let mut exprs: std::vec::Vec<Statement<'a>> = std::vec::Vec::new();
         let mut front_groups: std::vec::Vec<std::vec::Vec<Statement<'a>>> = std::vec::Vec::new();
-        let mut needs_placeholder = false;
+        let mut needs_placeholder = None;
 
         // Leaves folded into a static template string by style/class planning.
         for span in elided_value_spans {
@@ -221,7 +232,7 @@ impl<'a> AstDomTransform<'a, '_> {
         }
         operations.extend(exprs);
         Ok(AttrsLowering {
-            needs_text_placeholder: needs_placeholder,
+            text_placeholder: needs_placeholder,
             children_replacement,
         })
     }
@@ -353,7 +364,7 @@ impl<'a> AstDomTransform<'a, '_> {
         exprs: &mut std::vec::Vec<Statement<'a>>,
         front_groups: &mut std::vec::Vec<std::vec::Vec<Statement<'a>>>,
         dynamics: &mut std::vec::Vec<DynamicSlot<'a>>,
-        needs_placeholder: &mut bool,
+        needs_placeholder: &mut Option<Span>,
     ) -> Result<()> {
         let span = plan.span;
         let semantic_spans = if self.semantic_trace.is_recording() {
@@ -549,7 +560,10 @@ impl<'a> AstDomTransform<'a, '_> {
                 let text_id = self.next_element_id();
                 let first_child = self.static_member_expression(span, element_id, "firstChild");
                 declarations.push(self.variable_statement(span, &text_id, first_child));
-                *needs_placeholder = true;
+                // Source order: a later dynamic `textContent` overwrites the
+                // slot again, so the last one is the position to compare a
+                // `children` attribute against.
+                *needs_placeholder = Some(plan.span);
                 text_id
             } else {
                 element_id.to_string()

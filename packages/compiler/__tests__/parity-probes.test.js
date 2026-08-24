@@ -1909,6 +1909,181 @@ const a = <div tabindex={0} />;
 `,
   "1x attribute boolean expression false": `
 const a = <input disabled={false} />;
+`,
+
+  // --- the `children` attribute's single slot ------------------------------
+  // Babel keeps one `children` local per element in `transformAttributes` and
+  // pushes it onto the child list at the end (`if (!hasChildren && children)`),
+  // so promotion happens in every position, literal-valued `children`
+  // attributes never claim the slot, a dynamic `textContent` competes for it in
+  // source order, and a void or `<noscript>` element is pushed but never
+  // visited (`if (!voidTag) { … if (tagName !== "noscript") transformChildren }`).
+  // Each of those is pinned in both positions, since the template root and the
+  // nested child are separate lowerings here.
+  "1x children attribute nested": `
+const a = <div><span children={x()} /></div>;
+`,
+  "1x children attribute nested deep": `
+const a = <div><section><span children={x()} /></section></div>;
+`,
+  "1x children attribute nested with static siblings": `
+const a = <div>lead<span children={x()} />tail</div>;
+`,
+  "1x children attribute nested with dynamic sibling": `
+const a = <div>{y()}<span children={x()} /></div>;
+`,
+  "1x children attribute nested on two siblings": `
+const a = <div><span children={x()} /><span children={y()} /></div>;
+`,
+  "1x children attribute nested in svg": `
+const a = <svg><rect children={x()} /></svg>;
+`,
+  "1x children attribute nested custom element": `
+const a = <div><my-el children={x()} /></div>;
+`,
+  "1x children attribute void root": `
+const a = <br children={x()} />;
+`,
+  "1x children attribute void root input": `
+const a = <input children={x()} />;
+`,
+  "1x children attribute void nested": `
+const a = <div><br children={x()} /></div>;
+`,
+  "1x children attribute noscript root": `
+const a = <noscript children={c()} />;
+`,
+  "1x children attribute noscript nested": `
+const a = <div><noscript children={c()} /></div>;
+`,
+  "1x children attribute nested shadowed by text child": `
+const a = <div><span children={x()}>s</span></div>;
+`,
+  "1x children attribute nested shadowed by whitespace child": `
+const a = <div><span children={x()}>   </span></div>;
+`,
+  "1x children attribute nested shadowed by comment child": `
+const a = <div><span children={x()}>{/* c */}</span></div>;
+`,
+  "1x children attribute nested with spread": `
+const a = <div><span {...p} children={x()} /></div>;
+`,
+  "1x children attribute nested folded to a literal": `
+const a = <div><span children={"a" + "b"} /></div>;
+`,
+  "1x duplicate children attributes nested": `
+const a = <div><span children={a1()} children={b1()} /></div>;
+`,
+  "1x duplicate children attributes trailing literal": `
+const a = <div children={x()} children={"s"} />;
+`,
+  "1x duplicate children attributes trailing folded literal": `
+const a = <div children={x()} children={"a" + "b"} />;
+`,
+  "1x duplicate children attributes leading literal": `
+const a = <div children={"s"} children={x()} />;
+`,
+  "1x duplicate children attributes around a nonliteral": `
+const a = <div children={"a" + "b"} children={y()} children={"c" + "d"} />;
+`,
+  "1x duplicate children attributes nested trailing literal": `
+const a = <div><span children={x()} children={"s"} /></div>;
+`,
+  "1x duplicate children attributes nested trailing folded literal": `
+const a = <div><span children={x()} children={"a" + "b"} /></div>;
+`,
+  "1x children attribute after dynamic textContent": `
+const a = <div textContent={t()} children={x()} />;
+`,
+  "1x children attribute before dynamic textContent": `
+const a = <div children={x()} textContent={t()} />;
+`,
+  "1x children attribute nested after dynamic textContent": `
+const a = <div><span textContent={t()} children={x()} /></div>;
+`,
+  "1x children attribute nested before dynamic textContent": `
+const a = <div><span children={x()} textContent={t()} /></div>;
+`,
+  "1x children attribute nested between dynamic and literal textContent": `
+const a = <div><span textContent={t()} children={x()} textContent="lit" /></div>;
+`,
+  "1x children attribute nested after two dynamic textContent": `
+const a = <div><span textContent={t()} textContent={u()} children={x()} /></div>;
+`,
+  "1x children attribute nested with literal textContent": `
+const a = <div><span textContent="lit" children={x()} /></div>;
+`,
+  "1x literal children attribute nested before dynamic textContent": `
+const a = <div><span children={x()} textContent={t()} children={"s"} /></div>;
+`,
+  "1x dynamic textContent nested with real children": `
+const a = <div><span textContent={t()}>hi</span></div>;
+`,
+  "1x children attribute nested with static marker": `
+const a = <div><span children={/* @once */ x()} /></div>;
+`,
+  "1x children attribute nested with event and ref": `
+const a = <div><span children={x()} onClick={c} ref={r} /></div>;
+`,
+  "1x children attribute nested jsx value": `
+const a = <div><span children={<b>{x()}</b>} /></div>;
+`,
+  "1x children attribute nested undefined": `
+const a = <div><span children={undefined} /></div>;
+`,
+  "1x children attribute nested boolean literal": `
+const a = <div><span children={true} /></div>;
+`,
+  "1x children attribute nested confident object": `
+const a = <div><span children={{ a: 1 }} /></div>;
+`,
+  // The capture Babel keeps is the *last* one named `children` that reaches
+  // `children = value`, and a literal-only value reaches it. Promoting the
+  // earlier `x()` instead would insert a value Babel never inserts.
+  "1x duplicate children attributes trailing null": `
+const a = <div children={x()} children={null} />;
+`,
+  "1x duplicate children attributes nested trailing boolean": `
+const a = <div><span children={x()} children={true} /></div>;
+`,
+  "1x children attribute nested constant folded boolean": `
+const a = <div><span children={1 === 1} /></div>;
+`,
+  "1x children attribute nested on textarea with value": `
+const a = <div><textarea value={v()} children={x()} /></div>;
+`,
+  "1x children attribute nested on option with value": `
+const a = <select><option value="v" children={x()} /></select>;
+`,
+  "1x children attribute nested conditional value": `
+const a = <div><span children={cond() ? a1() : b1()} /></div>;
+`,
+  "1x children attribute nested with innerHTML": `
+const a = <div><span innerHTML={h()} children={x()} /></div>;
+`,
+  // Babel guards the whole child recursion with `if (!voidTag) { … if
+  // (tagName !== "noscript") transformChildren(…) }`, so a void or
+  // `<noscript>` template root never lowers its *source* children at all.
+  // This compiler has no such gate on the general case (only the
+  // `children`-attribute promotion carries it), so it inserts anyway.
+  // Divergence 2 in docs/execution-contract.md.
+  "1x void root children": `
+const a = <br>{c()}</br>;
+`,
+  "1x noscript root children": `
+const a = <noscript>{c()}</noscript>;
+`,
+  // The dynamic-`textContent` placeholder push (children.rs / element.rs)
+  // carries no void-element or `<noscript>` check at all, unlike every other
+  // gate in this file, so it adds a placeholder space text node to a void or
+  // `<noscript>` element's template that Babel never emits. Pre-existing and
+  // byte-identical on `main`; not fixed by the `children`-attribute
+  // promotion. Divergence 7 in docs/execution-contract.md.
+  "1x br textContent placeholder": `
+const a = <br textContent={t()} />;
+`,
+  "1x nested br textContent placeholder": `
+const a = <div><br textContent={t()} /></div>;
 `
 };
 

@@ -880,18 +880,79 @@ impl<'a> AstDomTransform<'a, '_> {
         let mut child_declarations = std::vec::Vec::new();
         let mut child_operations = std::vec::Vec::new();
 
+        // Babel runs one `transformElement`/`transformAttributes` pair per
+        // element, wherever the element sits, so a nested native element
+        // promotes a non-literal `children` attribute to a child insert
+        // exactly as a template root does: the capture is
+        // `else if (key === "children") children = value` — ungated on
+        // position — and the push is
+        // `if (!hasChildren && children) path.node.children.push(children)`.
+        // Only lowering the promotion at the root made
+        // `<div><span children={x()}/></div>` emit nothing at all.
+        //
+        // The gates match `lower_element_with_setup`: no source children
+        // (Babel's `!hasChildren`, computed over the raw child list, so
+        // whitespace and comments shadow the attribute too), no spread (the
+        // value goes through `processSpreads` into the merged props object
+        // instead), and not a position Babel pushes the slot into but never
+        // visits — `if (!voidTag) { … if (tagName !== "noscript")
+        // transformChildren(…) }`.
+        let has_spread = child
+            .opening_element
+            .attributes
+            .iter()
+            .any(|attr| matches!(attr, oxc_ast::ast::JSXAttributeItem::SpreadAttribute(_)));
+        let captured_child = (child.children.is_empty()
+            && !crate::shared::utils::is_void_element(&tag_name)
+            && tag_name != "noscript"
+            && !has_spread)
+            .then(|| self.promoted_children_attribute(child))
+            .flatten();
+
         let attrs_lowering = self.lower_template_attributes(
             &child.opening_element.attributes,
             &tag_name,
             true,
             &child_id,
             !child.children.is_empty(),
-            None,
+            // Keeps the attribute loop from deciding the captured value as
+            // `elided`: when it survives the slot contest below, child
+            // insertion reports it instead. `lower_template_attributes` also
+            // reads this as `children_from_attribute` on its spread branch,
+            // which cannot fire here — the capture is gated on `!has_spread`,
+            // so this is `None` whenever a spread exists.
+            captured_child.map(|(_, container)| container.expression.span()),
             &mut child_template.html,
             &mut child_declarations,
             &mut child_operations,
             dynamics,
         )?;
+
+        // Babel keeps one `children` slot per element and two attributes write
+        // it: this capture, and a dynamic `textContent`, which replaces it with
+        // the synthesized single-space text node (`children = t.jsxText(" ")`).
+        // The loop runs in source order, so the later of the two is what
+        // `path.node.children.push` receives — measured both ways against the
+        // 1.x plugin, which inserts for `<span textContent={t()}
+        // children={x()}/>` and keeps the placeholder for the reverse
+        // spelling. A literal `textContent` never writes the slot, and
+        // `text_placeholder` is `None` in exactly that case.
+        let attribute_child = captured_child.filter(|(index, _)| {
+            attrs_lowering.children_replacement.is_none()
+                && attrs_lowering.text_placeholder.is_none_or(|placeholder| {
+                    child.opening_element.attributes[*index].span().start > placeholder.start
+                })
+        });
+        // A capture the slot's other writer took over is never lowered and
+        // nothing is emitted for it — Babel drops it too. Decide the censused
+        // site as data here, because the attribute loop was told to leave it
+        // alone.
+        if let (None, Some((_, container))) = (attribute_child, captured_child) {
+            self.semantic_trace.resolve_lowered_attribute(
+                container.expression.span(),
+                crate::semantic_trace::ValueDecision::Elided,
+            );
+        }
 
         // Babel's textarea `value` fold replaces the element's children.
         let child: &JSXElement<'a> = match attrs_lowering.children_replacement {
@@ -901,11 +962,34 @@ impl<'a> AstDomTransform<'a, '_> {
                 clone.children.push(replacement);
                 self.allocator.alloc(clone)
             }
-            None => child,
+            None => match attribute_child {
+                // The promoted value joins the (empty) source child list as an
+                // ordinary expression container, so child lowering inserts it
+                // and reports its censused `jsx-child` decision.
+                Some((_, container)) => {
+                    let mut clone = child.clone_in(self.allocator);
+                    clone
+                        .children
+                        .push(oxc_ast::ast::JSXChild::ExpressionContainer(
+                            oxc_allocator::Box::new_in(
+                                container.clone_in(self.allocator),
+                                self.allocator,
+                            ),
+                        ));
+                    self.allocator.alloc(clone)
+                }
+                None => child,
+            },
         };
 
         child_template.push_both(">");
-        if attrs_lowering.needs_text_placeholder {
+        // Babel's `!hasChildren` gate again: the placeholder text node only
+        // exists because the dynamic `textContent` wrote the element's single
+        // `children` slot and nothing was there to shadow it. With a child
+        // list — a promoted `children` value, or the element's own source
+        // children — the `firstChild` declaration still emits and the children
+        // compile normally.
+        if attrs_lowering.text_placeholder.is_some() && child.children.is_empty() {
             child_template.html.push(' ');
         } else {
             self.lower_dom_children(
