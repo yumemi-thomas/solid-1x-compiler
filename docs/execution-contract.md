@@ -217,7 +217,8 @@ answers are not the same.
    nothing (and contribute no markup) there. This compiler inserts, and keeps
    static children in the template. Only the `children`-attribute *promotion*
    carries those two gates, in both positions; the general case is untouched.
-   Nested positions already agree with Babel.
+   Nested positions already agree with Babel. Probes: `1x void root children`,
+   `1x noscript root children`.
 3. **A `children` value this compiler folds confidently is dropped where Babel
    inserts it.** Babel's capture takes any container value that is not a string
    or number after `evaluateAndInline`, so `children={null}`,
@@ -246,14 +247,33 @@ answers are not the same.
    `<div><my-el children={x()}/></div>` gets the insert but not the owner
    write. Pre-existing; promoting the nested `children` value is what made it
    visible. Probe: `1x children attribute nested custom element`.
+7. **A dynamic `textContent` placeholder is pushed without a void/`<noscript>`
+   gate.** The placeholder push in `children.rs` and its companion call in
+   `element.rs` carry no void-element or `<noscript>` check at all, unlike
+   every gate above, so a dynamic `textContent` on one of those elements gets
+   an extra placeholder space text node Babel never emits:
+   `<div><br textContent={t()}/></div>` is Babel's `` `<div><br>` `` against
+   this compiler's `` `<div><br> ` `` (trailing space), and the same one-space
+   difference shows for a root `<br textContent={t()}/>`,
+   `<div><noscript textContent={t()}/></div>`, `<div><input
+   textContent={t()}/></div>`, and with a `children={x()}` sibling on the same
+   element. Pre-existing and byte-identical on `main` before this branch — the
+   `children`-attribute promotion never touches this path, so it is scoped out
+   of this change rather than fixed here. Probes: `1x br textContent
+   placeholder`, `1x nested br textContent placeholder`.
 
 Two more shapes were measured while confirming the list and are recorded
-without probes of their own, so they are not mistaken for parity: a nested
-element whose only runtime work is a literal `children` property write
-(`<div><span children="s"/></div>`) makes the 1.x plugin *throw* — a one-sided
-reference failure, not a divergence — while this compiler emits the write; and
-a numeric `children={5}` becomes `.children = "5"` in Babel (`children` is not
-in `Properties`, so the fold stringifies it) against `.children = 5` here.
-Neither is in the probe corpus: pinning a reference failure also means
-enumerating it in the suite's `referenceRejected` set, which is a separate
-change from this one.
+without probes of their own, so they are not mistaken for parity: nested is
+where the 1.x plugin *throws* on a literal `children` property write — a
+one-sided reference failure, not a divergence — and the throw is not specific
+to strings: `<div><span children="s"/></div>` and `<div><span
+children={5}/></div>` both throw the same `"Property object of
+MemberExpression expected node to be of a type [\"Expression\",\"Super\"] but
+instead got undefined"`, because the failure is in Babel's nested attribute
+lowering itself, before it looks at the value. The `.children = "5"` versus
+`.children = 5` value difference is a *different*, non-throwing shape: a
+**root**-position `<span children={5}/>`, where Babel's literal-attribute path
+folds the number to a string (`children` is not in `Properties`) while this
+compiler keeps it numeric. Neither is in the probe corpus: pinning a reference
+failure also means enumerating it in the suite's `referenceRejected` set,
+which is a separate change from this one.

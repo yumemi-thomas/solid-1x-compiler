@@ -2060,6 +2060,30 @@ const a = <div><span children={cond() ? a1() : b1()} /></div>;
 `,
   "1x children attribute nested with innerHTML": `
 const a = <div><span innerHTML={h()} children={x()} /></div>;
+`,
+  // Babel guards the whole child recursion with `if (!voidTag) { … if
+  // (tagName !== "noscript") transformChildren(…) }`, so a void or
+  // `<noscript>` template root never lowers its *source* children at all.
+  // This compiler has no such gate on the general case (only the
+  // `children`-attribute promotion carries it), so it inserts anyway.
+  // Divergence 2 in docs/execution-contract.md.
+  "1x void root children": `
+const a = <br>{c()}</br>;
+`,
+  "1x noscript root children": `
+const a = <noscript>{c()}</noscript>;
+`,
+  // The dynamic-`textContent` placeholder push (children.rs / element.rs)
+  // carries no void-element or `<noscript>` check at all, unlike every other
+  // gate in this file, so it adds a placeholder space text node to a void or
+  // `<noscript>` element's template that Babel never emits. Pre-existing and
+  // byte-identical on `main`; not fixed by the `children`-attribute
+  // promotion. Divergence 7 in docs/execution-contract.md.
+  "1x br textContent placeholder": `
+const a = <br textContent={t()} />;
+`,
+  "1x nested br textContent placeholder": `
+const a = <div><br textContent={t()} /></div>;
 `
 };
 
