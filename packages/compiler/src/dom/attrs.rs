@@ -410,9 +410,6 @@ impl<'a> AstDomTransform<'a, '_> {
                     // the outer attribute-value site. The whole value is
                     // discarded, so withdraw those inner sites while keeping
                     // the exact outer site to carry the elided decision.
-                    if drops_jsx_subtree {
-                        self.semantic_trace.retract_within(*span);
-                    }
                     for kind in [
                         crate::semantic_trace::ExecutionSiteKind::NativeAttribute,
                         crate::semantic_trace::ExecutionSiteKind::JsxChild,
@@ -424,6 +421,11 @@ impl<'a> AstDomTransform<'a, '_> {
                                 crate::semantic_trace::ValueDecision::Elided,
                             );
                         }
+                    }
+                    if drops_jsx_subtree {
+                        // Decide the outer value first so it survives even
+                        // when this span includes its expression container.
+                        self.semantic_trace.retract_within(*span);
                     }
                 }
             }
