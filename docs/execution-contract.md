@@ -306,6 +306,11 @@ were deleted only after the affected modes reached byte parity.
    Probes cover dynamic markup, nested static markup, and the direct-static
    `child.id` gate; dynamic-mode reference rejections are recorded explicitly.
 
+Shadowed JSX-valued native `children` attributes are reconciled under the same
+discarded-subtree contract: lowering keeps the outer attribute-value site as
+`elided` and withdraws nested sites it never visits. Transform output is
+unchanged and remains byte-identical to Babel.
+
 Two more shapes were measured while confirming the list and are recorded
 without probes of their own, so they are not mistaken for parity: nested is
 where the 1.x plugin *throws* on a literal `children` property write — a

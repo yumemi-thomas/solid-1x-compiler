@@ -383,6 +383,8 @@ impl<'a> AstDomTransform<'a, '_> {
             }
             PlanValue::None => return Ok(()),
         };
+        let drops_jsx_subtree =
+            matches!(&raw, Expression::JSXElement(_) | Expression::JSXFragment(_));
 
         // Non-literal `children` attributes are consumed by child insertion
         // (see `lower_element_with_setup`), never emitted as attributes;
@@ -404,6 +406,13 @@ impl<'a> AstDomTransform<'a, '_> {
                     .iter()
                     .filter(|span| Some(**span) != promoted_children_span)
                 {
+                    // A JSX-valued loser contains nested census sites inside
+                    // the outer attribute-value site. The whole value is
+                    // discarded, so withdraw those inner sites while keeping
+                    // the exact outer site to carry the elided decision.
+                    if drops_jsx_subtree {
+                        self.semantic_trace.retract_within(*span);
+                    }
                     for kind in [
                         crate::semantic_trace::ExecutionSiteKind::NativeAttribute,
                         crate::semantic_trace::ExecutionSiteKind::JsxChild,

@@ -1185,6 +1185,26 @@ fn source_children_still_shadow_a_nested_children_attribute() {
         );
         assert!(!emitted(source).contains("_$insert"), "{source}");
     }
+
+    let source =
+        "const C = () => <div><span children={<b>{hidden()}</b>}>{visible()}</span></div>;";
+    assert_eq!(
+        sites(source),
+        [
+            (
+                "<b>{hidden()}</b>",
+                ExecutionSiteKind::NativeAttribute,
+                value(ValueDecision::Elided)
+            ),
+            (
+                "visible()",
+                ExecutionSiteKind::JsxChild,
+                value(ValueDecision::ReactiveRerun)
+            ),
+        ],
+        "{source}"
+    );
+    assert!(!emitted(source).contains("hidden()"), "{source}");
 }
 
 #[test]
