@@ -1003,6 +1003,8 @@ fn a_void_element_children_attribute_is_pushed_but_never_visited() {
     for source in [
         "const C = () => <br children={value()} />;",
         "const C = () => <div><br children={value()} /></div>;",
+        "const C = () => <menuitem children={value()} />;",
+        "const C = () => <div><keygen children={value()} /></div>;",
     ] {
         assert_eq!(
             sites(source),
@@ -1011,6 +1013,23 @@ fn a_void_element_children_attribute_is_pushed_but_never_visited() {
                 ExecutionSiteKind::JsxChild,
                 value(ValueDecision::Elided)
             )],
+            "{source}"
+        );
+        assert!(!emitted(source).contains("_$insert"), "{source}");
+    }
+}
+
+#[test]
+fn babel_legacy_void_tags_discard_source_children_in_every_position() {
+    // Babel 0.40.10 still includes these obsolete HTML tags in VoidElements.
+    // Solid 1.x parity follows that exact compiler vocabulary rather than the
+    // modern runtime's shorter list.
+    for source in [
+        "const C = () => <keygen>{value()}</keygen>;",
+        "const C = () => <div><menuitem class={cls()}>{value()}</menuitem></div>;",
+    ] {
+        assert!(
+            !sites(source).iter().any(|(text, _, _)| *text == "value()"),
             "{source}"
         );
         assert!(!emitted(source).contains("_$insert"), "{source}");

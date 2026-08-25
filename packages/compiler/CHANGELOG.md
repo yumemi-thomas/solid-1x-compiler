@@ -90,6 +90,12 @@
 
 ### Patch Changes
 
+- Match Babel 0.40.10's exact void-element vocabulary by treating its legacy
+  `<keygen>` and `<menuitem>` tags as void. Their source children and promoted
+  `children` values are now discarded in root and nested lowering, closing the
+  final positive Solid 1.x transform divergence without changing the semantic
+  trace schema.
+
 - Promote a native element's `children` attribute in every position, not only
   on a template root. Babel runs one `transformAttributes` per element, and its
   push is `if (!hasChildren && children) path.node.children.push(children)`, so
