@@ -1,9 +1,0 @@
-@@ -2,7 +2,7 @@
- import { getNextElement as _$getNextElement__r_dom } from "r-dom";
- import { setProperty as _$setProperty__r_dom } from "r-dom";
- import { template as _$template__r_dom } from "r-dom";
--var _g1$ = _$template__r_dom("<div><br>");
-+var _g1$ = _$template__r_dom("<div><br> ");
- var _g2$ = _$getNextElement__r_dom(_g1$);
- _$effect__r_dom(() => {
-   return _$setProperty__r_dom(_g2$.firstChild.firstChild, "data", t());

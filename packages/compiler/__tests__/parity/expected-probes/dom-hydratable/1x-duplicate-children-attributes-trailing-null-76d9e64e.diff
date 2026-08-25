@@ -1,9 +1,0 @@
-@@ -1,7 +1,4 @@
- import { getNextElement as _$getNextElement__r_dom } from "r-dom";
--import { insert as _$insert__r_dom } from "r-dom";
- import { template as _$template__r_dom } from "r-dom";
- var _g1$ = _$template__r_dom("<div>");
--var _g2$ = _$getNextElement__r_dom(_g1$);
--_$insert__r_dom(_g2$, null);
--const a = _g2$;
-+const a = _$getNextElement__r_dom(_g1$);

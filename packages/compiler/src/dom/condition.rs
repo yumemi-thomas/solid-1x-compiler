@@ -3,6 +3,7 @@ use oxc_ast::ast::{Expression, JSXChild, JSXElement, JSXFragment};
 use oxc_span::{GetSpan, Span};
 
 use crate::dom::element::AstDomTransform;
+use crate::shared::ast::arrow_expression;
 use crate::shared::condition::{
     is_condition_shape, memo_wrap_thunk_with_trace, transform_condition, zero_arg_call_thunk,
     ConditionBuilder,
@@ -121,6 +122,15 @@ impl<'a> AstDomTransform<'a, '_> {
         }
         if let Some(callee) = zero_arg_call_thunk(&value, self.allocator) {
             return callee;
+        }
+        // Babel creates this reactive wrapper before its outer traversal
+        // lowers the JSX. Keeping the wrapper expression-bodied preserves the
+        // nested setup IIFE that traversal produces.
+        if matches!(
+            value,
+            Expression::JSXElement(_) | Expression::JSXFragment(_)
+        ) {
+            return arrow_expression(self.allocator, span, value);
         }
         self.arrow_return_expression(span, value)
     }

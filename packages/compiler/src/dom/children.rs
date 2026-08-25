@@ -135,6 +135,61 @@ impl<'a> AstDomTransform<'a, '_> {
                         && !is_component_name(&child.opening_element.name)
                         && element_name(&child.opening_element.name)? == "head"
                     {
+                        let close_context = CloseTagContext {
+                            last_element: Some(index) == last_element,
+                            to_be_closed: child_to_be_closed.clone(),
+                        };
+                        if let Some(static_template) =
+                            lower_static_native_template(self, child, close_context.clone())?
+                        {
+                            // Babel keeps a nested head's markup. With no
+                            // dynamic child id it does not synthesize the
+                            // NoHydration call at all.
+                            template.append(static_template);
+                            if filtered_index(&element.children[index]).is_some_and(|position| {
+                                self.detect_expressions(&filtered, position)
+                            }) {
+                                let name = self.next_element_id();
+                                let lookup = self.child_element_expression(
+                                    child.span,
+                                    element_id,
+                                    child_node_index,
+                                    "head",
+                                );
+                                declarations.push(self.variable_statement(
+                                    element.span,
+                                    &name,
+                                    lookup,
+                                ));
+                                self.last_child_walk = Some((name, child_node_index));
+                                child_node_index += 1;
+                            }
+                            index += 1;
+                            continue;
+                        }
+
+                        // Babel first collects the head template, then throws
+                        // away the head's setup arrays and substitutes one bare
+                        // NoHydration call. Lower into discarded arrays to keep
+                        // the markup byte-faithful without executing or tracing
+                        // any of the discarded subtree.
+                        let mut discarded_declarations = std::vec::Vec::new();
+                        let mut discarded_operations = std::vec::Vec::new();
+                        let mut discarded_dynamics = std::vec::Vec::new();
+                        self.semantic_trace.suppress();
+                        let discarded = self.lower_dynamic_native_child(
+                            child,
+                            close_context,
+                            element_id,
+                            child_node_index,
+                            None,
+                            template,
+                            &mut discarded_declarations,
+                            &mut discarded_operations,
+                            &mut discarded_dynamics,
+                        );
+                        self.semantic_trace.resume();
+                        discarded?;
                         self.template_state.uses_create_component = true;
                         if !self
                             .template_state
@@ -161,17 +216,9 @@ impl<'a> AstDomTransform<'a, '_> {
                             ],
                         );
                         operations.push(self.ast().statement_expression(child.span, call));
-                        // The element is replaced outright: neither its
-                        // attributes nor its children are lowered, and nothing
-                        // of it reaches the template either. Withdraw the
-                        // censused sites inside it — a `ref` or handler on the
-                        // `<head>` itself included — since no code exists to
-                        // decide about. (Babel keeps this subtree's markup, but
-                        // when the head has dynamic content it pushes this same
-                        // `createComponent(NoHydration, {})` call into the
-                        // parent's exprs — not an insert; markup is the only
-                        // divergence, execution is parity-clean. See
-                        // docs/execution-contract.md.)
+                        // The lowered setup was discarded, so withdraw the
+                        // censused sites inside it. The retained head markup
+                        // contains only its static shell.
                         self.retract_discarded_element_sites(child);
                         index += 1;
                         continue;
@@ -961,12 +1008,20 @@ impl<'a> AstDomTransform<'a, '_> {
             // reads this as `children_from_attribute` on its spread branch,
             // which cannot fire here — the capture is gated on `!has_spread`,
             // so this is `None` whenever a spread exists.
-            captured_child.map(|(_, container)| container.expression.span()),
+            captured_child
+                .as_ref()
+                .map(|(_, container)| container.expression.span()),
             &mut child_template.html,
             &mut child_declarations,
             &mut child_operations,
             dynamics,
         )?;
+
+        // Babel applies custom-element owner context in every DOM position,
+        // after attribute operations and before child insertion.
+        if self.should_capture_custom_element_context(child, &tag_name) {
+            child_operations.push(self.custom_element_context_statement(child.span, &child_id));
+        }
 
         // Babel keeps one `children` slot per element and two attributes write
         // it: this capture, and a dynamic `textContent`, which replaces it with
@@ -977,7 +1032,7 @@ impl<'a> AstDomTransform<'a, '_> {
         // children={x()}/>` and keeps the placeholder for the reverse
         // spelling. A literal `textContent` never writes the slot, and
         // `text_placeholder` is `None` in exactly that case.
-        let attribute_child = captured_child.filter(|(index, _)| {
+        let attribute_child = captured_child.as_ref().filter(|(index, _)| {
             attrs_lowering.children_replacement.is_none()
                 && attrs_lowering.text_placeholder.is_none_or(|placeholder| {
                     child.opening_element.attributes[*index].span().start > placeholder.start
@@ -987,7 +1042,7 @@ impl<'a> AstDomTransform<'a, '_> {
         // nothing is emitted for it — Babel drops it too. Decide the censused
         // site as data here, because the attribute loop was told to leave it
         // alone.
-        if let (None, Some((_, container))) = (attribute_child, captured_child) {
+        if let (None, Some((_, container))) = (attribute_child, captured_child.as_ref()) {
             self.semantic_trace.resolve_lowered_attribute(
                 container.expression.span(),
                 crate::semantic_trace::ValueDecision::Elided,
@@ -1029,7 +1084,9 @@ impl<'a> AstDomTransform<'a, '_> {
         // list — a promoted `children` value, or the element's own source
         // children — the `firstChild` declaration still emits and the children
         // compile normally.
-        if attrs_lowering.text_placeholder.is_some() && child.children.is_empty() {
+        if crate::shared::utils::is_void_element(&tag_name) || tag_name == "noscript" {
+            self.retract_children_sites(&child.children);
+        } else if attrs_lowering.text_placeholder.is_some() && child.children.is_empty() {
             child_template.html.push(' ');
         } else {
             self.lower_dom_children(

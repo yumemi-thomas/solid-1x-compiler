@@ -336,6 +336,28 @@ pub(crate) fn arrow_return_expression<'a>(
     ast.expression_arrow_function(span, false, false, NONE, params, NONE, body)
 }
 
+/// An expression-bodied `() => value` arrow. Oxc stores the expression as a
+/// one-statement function body and distinguishes it with this flag.
+pub(crate) fn arrow_expression<'a>(
+    allocator: &'a Allocator,
+    span: Span,
+    value: Expression<'a>,
+) -> Expression<'a> {
+    let ast = ast(allocator);
+    let params = ast.formal_parameters(
+        span,
+        FormalParameterKind::ArrowFormalParameters,
+        ast.vec(),
+        NONE,
+    );
+    let body = ast.function_body(
+        span,
+        ast.vec(),
+        ast.vec1(ast.statement_expression(span, value)),
+    );
+    ast.expression_arrow_function(span, true, false, NONE, params, NONE, body)
+}
+
 pub(crate) fn arrow_iife<'a>(
     allocator: &'a Allocator,
     span: Span,

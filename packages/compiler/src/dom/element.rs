@@ -1,7 +1,8 @@
 use crate::error::Result;
 use oxc_allocator::{Allocator, CloneIn};
 use oxc_ast::ast::{
-    AssignmentOperator, AssignmentTarget, Expression, JSXElement, JSXExpression, Statement,
+    AssignmentOperator, AssignmentTarget, Expression, JSXAttributeItem, JSXAttributeName,
+    JSXElement, JSXExpression, Statement,
 };
 use oxc_span::GetSpan;
 
@@ -286,13 +287,19 @@ impl<'a, 'source> AstDomTransform<'a, 'source> {
                 && !element.opening_element.attributes.iter().any(|attr| {
                     matches!(attr, oxc_ast::ast::JSXAttributeItem::SpreadAttribute(_))
                 }))
-            .then(|| self.promoted_children_attribute(element))
+            .then(|| {
+                (!children_attribute_is_overwritten_by_dynamic_text_content(self, element))
+                    .then(|| self.promoted_children_attribute(element))
+                    .flatten()
+            })
             .flatten()
             .map(|(_, container)| container);
         // Which `children` value was promoted, so the attribute loop can tell
         // it apart from sibling `children` attributes the promotion dropped.
-        let promoted_children_span = attribute_child.map(|container| container.expression.span());
-        let element: &JSXElement<'a> = if let Some(container) = attribute_child {
+        let promoted_children_span = attribute_child
+            .as_ref()
+            .map(|container| container.expression.span());
+        let element: &JSXElement<'a> = if let Some(container) = attribute_child.as_ref() {
             let mut clone = element.clone_in(self.allocator);
             clone
                 .children
@@ -359,7 +366,11 @@ impl<'a, 'source> AstDomTransform<'a, 'source> {
         }
 
         template.push_both(">");
-        if needs_text_placeholder && element.children.is_empty() {
+        if crate::shared::utils::is_void_element(&tag_name) || tag_name == "noscript" {
+            // Babel never visits a void or `<noscript>` child list. The trace
+            // withdraws source sites at the same lowering decision.
+            self.retract_children_sites(&element.children);
+        } else if needs_text_placeholder && element.children.is_empty() {
             // Dynamic `textContent` adds a single space text node the effect
             // writes into — but only when the element has no children of its
             // own (Babel's `!hasChildren` gate; with children the `firstChild`
@@ -489,7 +500,7 @@ impl<'a, 'source> AstDomTransform<'a, 'source> {
         }
     }
 
-    fn should_capture_custom_element_context(
+    pub(crate) fn should_capture_custom_element_context(
         &self,
         element: &JSXElement<'a>,
         tag_name: &str,
@@ -551,7 +562,7 @@ impl<'a, 'source> AstDomTransform<'a, 'source> {
         })
     }
 
-    fn custom_element_context_statement(
+    pub(crate) fn custom_element_context_statement(
         &mut self,
         span: oxc_span::Span,
         element_id: &str,
@@ -648,6 +659,50 @@ fn children_attribute_container_from_item<'e, 'a>(
     Some(container)
 }
 
+/// Babel's attribute loop stores native `children` and dynamic `textContent`
+/// in one slot. At a template root a later dynamic `textContent` therefore
+/// overwrites an earlier `children` capture; the child value is not emitted.
+fn children_attribute_is_overwritten_by_dynamic_text_content(
+    transform: &AstDomTransform<'_, '_>,
+    element: &JSXElement<'_>,
+) -> bool {
+    let last = |name: &str| {
+        element
+            .opening_element
+            .attributes
+            .iter()
+            .rposition(|attr| match attr {
+                JSXAttributeItem::Attribute(attr) => matches!(
+                    &attr.name,
+                    JSXAttributeName::Identifier(identifier) if identifier.name == name
+                ),
+                JSXAttributeItem::SpreadAttribute(_) => false,
+            })
+    };
+    let Some(children_index) = last("children") else {
+        return false;
+    };
+    let Some(text_content_index) = last("textContent") else {
+        return false;
+    };
+    if text_content_index <= children_index || transform.effect_wrapper.is_none() {
+        return false;
+    }
+    let JSXAttributeItem::Attribute(attribute) =
+        &element.opening_element.attributes[text_content_index]
+    else {
+        return false;
+    };
+    let Some(oxc_ast::ast::JSXAttributeValue::ExpressionContainer(container)) = &attribute.value
+    else {
+        return false;
+    };
+    let Some(expression) = container.expression.as_expression() else {
+        return false;
+    };
+    transform.classify().is_dynamic(None, expression, false)
+}
+
 pub(crate) fn jsx_expression_to_expression<'a>(
     expression: &JSXExpression<'a>,
     allocator: &'a Allocator,
@@ -684,50 +739,35 @@ impl<'a> AstDomTransform<'a, '_> {
     /// `textContent` — and which one survives depends on their relative source
     /// position; see [`AttrsLowering::text_placeholder`].
     ///
-    /// Selection and lowerability are two separate steps here, and the order
-    /// matters. The scan stops at the attribute *Babel's* capture keeps, then
-    /// asks whether this compiler lowers that value; it never falls back to an
-    /// earlier `children` attribute, because Babel's own capture already
-    /// overwrote the slot with the later one. Falling back turned
-    /// `<div children={x()} children={null}/>` — where Babel inserts `null` —
-    /// into an insert of `x()`, which is worse than the missing insert it
-    /// replaced. A confidently-folded non-text value (`null`, `undefined`, a
-    /// boolean, a confident object literal) is such a capture: it is selected
-    /// and then dropped, which is divergence 3 in docs/execution-contract.md,
-    /// not a reason to promote a different value.
-    pub(crate) fn promoted_children_attribute<'e>(
+    /// The selected value is returned after the same confident folding Babel
+    /// performs before `transformAttributes`. String and numeric results are
+    /// ordinary literal attributes and therefore do not write the child slot;
+    /// all other results do, including `null`, booleans, `undefined`, and
+    /// object literals.
+    pub(crate) fn promoted_children_attribute(
         &self,
-        element: &'e JSXElement<'a>,
-    ) -> Option<(usize, &'e oxc_ast::ast::JSXExpressionContainer<'a>)> {
-        let (index, container) = element
+        element: &JSXElement<'a>,
+    ) -> Option<(usize, oxc_ast::ast::JSXExpressionContainer<'a>)> {
+        element
             .opening_element
             .attributes
             .iter()
             .enumerate()
             .rev()
             .find_map(|(index, attr)| {
-                let container = children_attribute_container_from_item(attr)?;
-                // `evaluateAndInline` has already rewritten a foldable value to
-                // a literal by the time Babel's gate above sees it, so a value
-                // that folds to a string or number is one of those literals.
-                let folds_to_text =
-                    container
-                        .expression
-                        .as_expression()
-                        .is_some_and(|expression| {
-                            matches!(
-                                self.evaluate_confident(expression),
-                                Some(crate::shared::attr_plan::ConfidentValue::Str(_))
-                                    | Some(crate::shared::attr_plan::ConfidentValue::Num(_))
-                            )
-                        });
-                (!folds_to_text).then_some((index, container))
-            })?;
-        container
-            .expression
-            .as_expression()
-            .is_none_or(|expression| self.evaluate_confident(expression).is_none())
-            .then_some((index, container))
+                let source = children_attribute_container_from_item(attr)?;
+                let mut container = source.clone_in(self.allocator);
+                if let Some(expression) = container.expression.as_expression_mut() {
+                    self.attr_planner().fold_confident(expression);
+                    if matches!(
+                        expression,
+                        Expression::StringLiteral(_) | Expression::NumericLiteral(_)
+                    ) {
+                        return None;
+                    }
+                }
+                Some((index, container))
+            })
     }
 }
 
