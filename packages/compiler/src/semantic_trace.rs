@@ -401,6 +401,12 @@ impl ExecutionCensus {
                     _ => {}
                 }
             }
+
+            fn child_list_span(children: &[JSXChild<'_>]) -> Option<Span> {
+                let first = children.first()?;
+                let last = children.last()?;
+                Some(Span::new(first.span().start, last.span().end))
+            }
         }
 
         impl<'b> Visit<'b> for CensusVisitor<'_, '_> {
@@ -453,10 +459,25 @@ impl ExecutionCensus {
                     _ => false,
                 };
 
+                // A void element or `<noscript>` drops its whole child list.
+                // Census that list as one value site, then suppress the sites
+                // nested inside it. Lowering resolves the range as `Elided`,
+                // giving consumers positive deletion evidence instead of a
+                // census hole over source code that cannot execute.
+                let discarded_child_list = native_tag_name
+                    .filter(|name| {
+                        crate::shared::utils::is_void_element(name) || *name == "noscript"
+                    })
+                    .and_then(|_| Self::child_list_span(&element.children));
+
                 // A component's JSX children shadow a `children` attribute
                 // entirely: the value never lowers, so neither it nor any JSX
                 // nested inside it is a site.
                 let dropped_before = self.dropped_ranges.len();
+                if let Some(span) = discarded_child_list {
+                    self.push(span, ExecutionSiteKind::JsxChild);
+                    self.dropped_ranges.push(span);
+                }
                 if !self.hydratable && native_tag_name.is_some() {
                     for child in &element.children {
                         let JSXChild::Element(child) = child else {

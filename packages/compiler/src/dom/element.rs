@@ -369,7 +369,7 @@ impl<'a, 'source> AstDomTransform<'a, 'source> {
         if crate::shared::utils::is_void_element(&tag_name) || tag_name == "noscript" {
             // Babel never visits a void or `<noscript>` child list. The trace
             // withdraws source sites at the same lowering decision.
-            self.retract_children_sites(&element.children);
+            self.discard_children_sites(&element.children);
         } else if needs_text_placeholder && element.children.is_empty() {
             // Dynamic `textContent` adds a single space text node the effect
             // writes into — but only when the element has no children of its

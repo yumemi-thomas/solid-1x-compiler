@@ -52,7 +52,7 @@ pub(crate) fn lower_static_native_template<'a>(
         // attributes push it onto the dynamic path. Both are divergences from
         // Babel, recorded in docs/execution-contract.md rather than repaired
         // by a trace that under-reports what this compiler emits.
-        ctx.retract_children_sites(&element.children);
+        ctx.discard_children_sites(&element.children);
         if ctx.should_close_tag(&tag_name, close_context.clone()) {
             template.html.push_str(&format!("</{tag_name}>"));
         }
