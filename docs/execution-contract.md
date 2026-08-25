@@ -260,13 +260,11 @@ even `--include-ignored` — can rewrite the witness as a side effect. A change
 that no fixture and no probe covers is a corpus gap: add the probes, and the
 regenerated baseline then grows by exactly those entries and nothing else.
 
-## Where this compiler and Babel 1.x still differ
+## Resolved compiler differences from Babel 1.x
 
 These are measured against the vendored `babel-plugin-jsx-dom-expressions`
-oracle. The behavioral divergences below are resolved and their differential
-artifacts were deleted only after the affected modes reached byte parity. One
-output-shape difference remains ratcheted: the redundant inner IIFE described
-in item 5. The trace reports this compiler's actual output at that shape.
+oracle. The divergences below are resolved and their differential artifacts
+were deleted only after the affected modes reached byte parity.
 
 1. **Resolved — template-root `children`/`textContent` slot order.** Both
    attributes write Babel's single `children` slot in source order, so
@@ -289,11 +287,11 @@ in item 5. The trace reports this compiler's actual output at that shape.
 4. **Resolved — folded child value emission.** A value such as
    `children={1 === 1}` now reaches insertion as `true`, matching Babel's
    `evaluateAndInline` preprocessing.
-5. **A JSX-valued hole loses Babel's inner IIFE.** Babel emits
-   `() => (() => {…})()` where this compiler emits `() => {…}`, for
-   `children={<b>{x()}</b>}` as for any other JSX-valued hole, in every
-   position and in the universal modes too. Probe: `1x children attribute
-   nested jsx value`.
+5. **Resolved — JSX-valued hole IIFE.** Reactive child thunks retain Babel's
+   expression-position setup boundary, emitting `() => (() => {…})()` for
+   `children={<b>{x()}</b>}` and other JSX-valued holes. Ordinary
+   statement-position `return <JSX>` continues to lift setup. Probe: `1x
+   children attribute nested jsx value`.
 6. **Resolved — nested custom-element owner context.** Native custom elements,
    customized built-ins, and slots now receive the same owner assignment in
    nested dynamic lowering as at the template root.

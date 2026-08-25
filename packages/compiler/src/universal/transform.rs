@@ -11,7 +11,9 @@ use oxc_ast_visit::VisitMut;
 use oxc_span::{GetSpan, Span};
 
 use crate::dom::element::{jsx_expression_to_expression, AstDomTransform, DomTransformConfig};
-use crate::shared::ast::{arrow_return_expression, expression_to_argument, object_method_property};
+use crate::shared::ast::{
+    arrow_expression, arrow_return_expression, expression_to_argument, object_method_property,
+};
 use crate::shared::bindings::BindingTable;
 use crate::shared::classify::Classify;
 use crate::shared::component_props::ComponentPropContext;
@@ -1122,10 +1124,14 @@ impl<'a, 'source> AstUniversalTransform<'a, 'source> {
                 self.classify()
                     .is_dynamic(Some(container.span.start), expression, false)
             });
+        let jsx_valued = matches!(
+            container.expression,
+            JSXExpression::JSXElement(_) | JSXExpression::JSXFragment(_)
+        );
         let mut value = jsx_expression_to_expression(&container.expression, self.allocator);
         self.visit_expression(&mut value);
         let value = if dynamic {
-            self.universal_child_expression(container.span, value)
+            self.universal_child_expression(container.span, value, jsx_valued)
         } else {
             value
         };
@@ -1138,10 +1144,20 @@ impl<'a, 'source> AstUniversalTransform<'a, 'source> {
 
     /// Mirror of Babel's `transformNode` wrapping for a dynamic universal
     /// child expression (`insert()` value).
-    fn universal_child_expression(&mut self, span: Span, value: Expression<'a>) -> Expression<'a> {
+    fn universal_child_expression(
+        &mut self,
+        span: Span,
+        value: Expression<'a>,
+        preserve_jsx_iife: bool,
+    ) -> Expression<'a> {
         if self.wrap_conditionals && is_condition_shape(&value) {
             return transform_condition(self, span, value, false)
                 .into_expression(self.allocator, span);
+        }
+        // JSX has already lowered to its setup IIFE here. Babel's reactive
+        // wrapper is expression-bodied, so do not unwrap that IIFE.
+        if preserve_jsx_iife {
+            return arrow_expression(self.allocator, span, value);
         }
         if let Some(callee) = zero_arg_call_thunk(&value, self.allocator) {
             return callee;
