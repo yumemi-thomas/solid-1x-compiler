@@ -276,10 +276,12 @@ were deleted only after the affected modes reached byte parity.
    no-inline-styles DOM, and dynamic DOM output.
 2. **Resolved — void and `<noscript>` child recursion.** Root and nested
    lowering now apply Babel's gates before visiting source children, including
-   attribute-driven nested paths. The trace retracts the discarded sites.
+   attribute-driven nested paths. The exact Babel 0.40.10 void vocabulary is
+   used, including its legacy `<keygen>` and `<menuitem>` entries rather than
+   the modern runtime's shorter list. The trace retracts the discarded sites.
    Probes: `1x void root children`, `1x noscript root children`, `1x nested
-   void children with dynamic attribute`, and `1x nested noscript children with
-   dynamic attribute`.
+   void children with dynamic attribute`, `1x nested noscript children with
+   dynamic attribute`, and the four `1x legacy void …` position/value forms.
 3. **Resolved — confidently folded non-text `children`.** `null`, `undefined`,
    booleans and confident object values now write Babel's child slot and are
    inserted after folding; string and numeric folds remain literal attributes.

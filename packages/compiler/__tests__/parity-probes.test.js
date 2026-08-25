@@ -2075,6 +2075,18 @@ const a = <noscript>{c()}</noscript>;
   "1x nested void children with dynamic attribute": `
 const a = <div><br class={c()}>{d()}</br></div>;
 `,
+  "1x legacy void keygen root children": `
+const a = <keygen>{c()}</keygen>;
+`,
+  "1x legacy void menuitem nested children": `
+const a = <div><menuitem class={c()}>{d()}</menuitem></div>;
+`,
+  "1x legacy void menuitem root children attribute": `
+const a = <menuitem children={c()} />;
+`,
+  "1x legacy void keygen nested children attribute": `
+const a = <div><keygen children={c()} /></div>;
+`,
   "1x nested noscript children with dynamic attribute": `
 const a = <div><noscript class={c()}>{d()}</noscript></div>;
 `,
