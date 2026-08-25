@@ -156,8 +156,11 @@ impl<'a> AstDomTransform<'a, '_> {
                                     child_node_index,
                                     "head",
                                 );
-                                declarations
-                                    .push(self.variable_statement(element.span, &name, lookup));
+                                declarations.push(self.variable_statement(
+                                    element.span,
+                                    &name,
+                                    lookup,
+                                ));
                                 self.last_child_walk = Some((name, child_node_index));
                                 child_node_index += 1;
                             }

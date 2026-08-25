@@ -288,11 +288,9 @@ impl<'a, 'source> AstDomTransform<'a, 'source> {
                     matches!(attr, oxc_ast::ast::JSXAttributeItem::SpreadAttribute(_))
                 }))
             .then(|| {
-                (!children_attribute_is_overwritten_by_dynamic_text_content(
-                    self, element,
-                ))
-                .then(|| self.promoted_children_attribute(element))
-                .flatten()
+                (!children_attribute_is_overwritten_by_dynamic_text_content(self, element))
+                    .then(|| self.promoted_children_attribute(element))
+                    .flatten()
             })
             .flatten()
             .map(|(_, container)| container);
