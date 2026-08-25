@@ -27,11 +27,9 @@
 //! Since then a third family joined them, in the other direction: shapes where
 //! a lowering path discards a whole subtree *unvisited*, so the censused sites
 //! inside it were never resolved and reconciliation failed the whole file. Those
-//! are pinned under "discarded subtrees" below, each against the sibling and
-//! keep-cases that make the retraction a claim about that one path rather than a
-//! blanket relaxation. Those fixes are lowering-observation-only — the recorder
-//! withdraws sites the emitter proved absent — so the emitted code is again
-//! byte-identical.
+//! are pinned under "discarded subtrees" below. Child-list deletion becomes one
+//! elided range; whole-element replacement retracts its interior. Both are
+//! lowering observations only, so emitted code remains byte-identical.
 
 use dom_expressions_compiler::{
     compile, CallbackDecision, CompileOptions, ExecutionSiteKind, SemanticTrace, TerminalDecision,
@@ -1029,7 +1027,17 @@ fn babel_legacy_void_tags_discard_source_children_in_every_position() {
         "const C = () => <div><menuitem class={cls()}>{value()}</menuitem></div>;",
     ] {
         assert!(
-            !sites(source).iter().any(|(text, _, _)| *text == "value()"),
+            sites(source).iter().any(|(text, kind, decision)| {
+                text.contains("value()")
+                    && *kind == ExecutionSiteKind::JsxChild
+                    && *decision == value(ValueDecision::Elided)
+            }),
+            "the discarded child list needs positive deletion evidence: {source}"
+        );
+        assert!(
+            !sites(source).iter().any(|(text, _, decision)| {
+                text.contains("value()") && *decision != value(ValueDecision::Elided)
+            }),
             "{source}"
         );
         assert!(!emitted(source).contains("_$insert"), "{source}");
@@ -1314,8 +1322,10 @@ fn a_confident_non_text_capture_is_folded_and_inserted() {
 // Three paths in the DOM lowering do this, and each used to leave every
 // censused site inside the skipped range unresolved — which fails the *file*,
 // not the shape: a tsc-clean source became unanalysable for a consumer.
-// `TraceRecorder::retract_within` withdraws them instead, because nothing was
-// emitted for them and so there is nothing to decide. The three:
+// Discarded child lists now become one `Elided` range, because positive
+// deletion evidence lets consumers certify that nothing inside executes.
+// Whole-element replacement still uses `TraceRecorder::retract_within`. The
+// three paths are:
 //
 // 1. the `<noscript>` static-template fast path (`dom/static_template.rs`),
 //    which emits the tag and returns without visiting the children;
@@ -1346,11 +1356,11 @@ fn a_confident_non_text_capture_is_folded_and_inserted() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a_discarded_noscript_child_list_retracts_its_sites() {
+fn a_discarded_noscript_child_list_is_one_elided_range() {
     // The static fast path never visits these children, and neither does
     // Babel. Every censused site inside the subtree goes with them, whatever
     // kind it is — including a `ref` and a handler nested one element deeper,
-    // which are the shapes that prove the retraction is a range and not a
+    // which are the shapes that prove the decision is a range and not a
     // per-child-expression patch.
     for source in [
         "const C = () => <div><noscript>{value()}</noscript></div>;",
@@ -1364,8 +1374,11 @@ fn a_discarded_noscript_child_list_retracts_its_sites() {
         "const C = () => <div><p><noscript>{value()}</noscript></p></div>;",
         "const C = () => <div><noscript><noscript>{value()}</noscript></noscript></div>;",
     ] {
-        assert_eq!(hydratable_sites(source), [], "{source}");
-        assert_eq!(sites(source), [], "{source}");
+        for reported in [hydratable_sites(source), sites(source)] {
+            assert_eq!(reported.len(), 1, "{source}: {reported:?}");
+            assert_eq!(reported[0].1, ExecutionSiteKind::JsxChild, "{source}");
+            assert_eq!(reported[0].2, value(ValueDecision::Elided), "{source}");
+        }
         // Nothing from the subtree reaches the output either: no insert, no
         // event delegation, no ref application.
         let code = emitted(source);
@@ -1377,7 +1390,7 @@ fn a_discarded_noscript_child_list_retracts_its_sites() {
 
 #[test]
 fn a_discarded_noscript_leaves_its_siblings_sites_intact() {
-    // Retraction is scoped to the discarded range. A sibling on either side of
+    // The elided decision is scoped to the discarded range. A sibling on either side of
     // the `<noscript>` is lowered normally and must still be reported.
     let source = "const C = () => <div>{before()}<noscript>{gone()}</noscript>{after()}</div>;";
     assert_eq!(
@@ -1387,6 +1400,11 @@ fn a_discarded_noscript_leaves_its_siblings_sites_intact() {
                 "before()",
                 ExecutionSiteKind::JsxChild,
                 value(ValueDecision::ReactiveRerun)
+            ),
+            (
+                "{gone()}",
+                ExecutionSiteKind::JsxChild,
+                value(ValueDecision::Elided)
             ),
             (
                 "after()",
@@ -1405,7 +1423,14 @@ fn every_noscript_lowering_discards_its_children_like_babel() {
     //
     // A `<noscript>` template root:
     let root = "const C = () => <noscript>{value()}</noscript>;";
-    assert_eq!(sites(root), []);
+    assert_eq!(
+        sites(root),
+        [(
+            "{value()}",
+            ExecutionSiteKind::JsxChild,
+            value(ValueDecision::Elided)
+        )]
+    );
     assert!(!emitted(root).contains("_$insert"));
 
     // A nested `<noscript>` whose attributes push it onto the dynamic path:
@@ -1415,7 +1440,11 @@ fn every_noscript_lowering_discards_its_children_like_babel() {
         "const C = () => <div><noscript onClick={h}>{value()}</noscript></div>;",
     ] {
         assert!(
-            !sites(source).iter().any(|(text, _, _)| *text == "value()"),
+            sites(source).iter().any(|(text, kind, decision)| {
+                text.contains("value()")
+                    && *kind == ExecutionSiteKind::JsxChild
+                    && *decision == value(ValueDecision::Elided)
+            }),
             "{source}"
         );
         assert!(!emitted(source).contains("_$insert"), "{source}");

@@ -920,23 +920,22 @@ impl<'a> AstDomTransform<'a, '_> {
         Ok(self.call_identifier(child.span, "_$getNextMatch", vec![base, tag]))
     }
 
-    /// Withdraw the censused execution sites of a child list this lowering
-    /// discards without visiting. The children occupy one contiguous source
-    /// range, so every site inside it belongs to the discarded subtree.
-    ///
-    /// The range is only ever *strictly* larger than the sites inside it:
-    /// a lone expression or spread child's site is its expression, inside the
-    /// braces, and a lone element child under a native parent is no site at
-    /// all — so `retract_within`'s strict containment loses nothing here.
-    pub(crate) fn retract_children_sites(&mut self, children: &[JSXChild<'a>]) {
+    /// Resolve a child list this lowering discards without visiting. The
+    /// census records the contiguous list as one JSX-child site and suppresses
+    /// everything nested inside it, so `Elided` is positive evidence that no
+    /// expression in the range executes.
+    pub(crate) fn discard_children_sites(&mut self, children: &[JSXChild<'a>]) {
         let Some(first) = children.first() else {
             return;
         };
         let last = children
             .last()
             .expect("a non-empty child list has a last child");
-        self.semantic_trace
-            .retract_within(oxc_span::Span::new(first.span().start, last.span().end));
+        self.semantic_trace.value(
+            oxc_span::Span::new(first.span().start, last.span().end),
+            crate::ExecutionSiteKind::JsxChild,
+            crate::ValueDecision::Elided,
+        );
     }
 
     /// Withdraw the censused execution sites inside a whole element the
@@ -1085,7 +1084,7 @@ impl<'a> AstDomTransform<'a, '_> {
         // children — the `firstChild` declaration still emits and the children
         // compile normally.
         if crate::shared::utils::is_void_element(&tag_name) || tag_name == "noscript" {
-            self.retract_children_sites(&child.children);
+            self.discard_children_sites(&child.children);
         } else if attrs_lowering.text_placeholder.is_some() && child.children.is_empty() {
             child_template.html.push(' ');
         } else {

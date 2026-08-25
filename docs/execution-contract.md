@@ -81,26 +81,19 @@ Callback positions decide between `later-event` (`event-handler`),
 `later-render` (`control-flow-render`, a built-in's function child), and
 `ref-apply` (`ref`).
 
-Expressions with no observable execution are not sites at all: literal-only
-leaves have nothing to report, and neither does anything nested inside a value
-the compiler discards wholesale.
+Literal-only leaves with no observable execution are not sites. A discarded
+value or child-list range is a site resolved `elided`; anything nested inside
+that range is suppressed because the range already proves it cannot execute.
 
 ## Discarded subtrees
 
-Some lowering paths do not decide a child list value by value; they skip the
-whole subtree without visiting it. Nothing there is emitted, so nothing there
-executes, so nothing there is a site — but the census walks source and cannot
-know that, and an unresolved site fails the *file*, not the shape. A source
-`tsc` accepts would become unanalysable for a consumer.
-
-`TraceRecorder::retract_within` is the answer: the discarding path withdraws
-the censused sites inside the range it skipped, at the point it decides to skip
-them. Like every other reporting call it is an observation by the code that
-made the decision, not a rule the census re-derives — which matters here more
-than elsewhere, because "is this subtree reachable" is exactly the kind of
-question two independent derivations get differently. It is recorder-internal:
-no serialized field carries it, and `SemanticTrace` looks the same as if the
-census had never enumerated those sites.
+Some lowering paths skip a whole subtree without visiting it. Nothing there is
+emitted, so nothing there executes. The trace distinguishes two shapes. A void
+or `<noscript>` child list is censused as one contiguous `jsx-child` range and
+resolved `elided`, giving consumers positive deletion evidence for everything
+inside it. A whole element replaced before lowering, such as hydratable
+`<head>`, uses `TraceRecorder::retract_within` to withdraw the sites the
+replacement made nonexistent.
 
 The parity-clean discard paths are:
 
@@ -135,9 +128,10 @@ the call order-independent, where an inclusive range would quietly depend on
 whether the parent recorded its decision before or after the discarding path
 ran.
 
-Retraction is a claim about a *path*, not merely a tag name. The compiler now
+Deletion is a claim about a *path*, not merely a tag name. The compiler now
 applies Babel's void/`<noscript>` recursion gates in every native position;
-attributes on the element may still lower, but no source child site survives.
+attributes on the element may still lower, while the source child list is one
+discarded range.
 
 Non-hydratable nested `<head>` is the one discard-shaped case handled the other
 way round, and it is genuinely a different shape: its static children *do* reach
@@ -278,7 +272,8 @@ were deleted only after the affected modes reached byte parity.
    lowering now apply Babel's gates before visiting source children, including
    attribute-driven nested paths. The exact Babel 0.40.10 void vocabulary is
    used, including its legacy `<keygen>` and `<menuitem>` entries rather than
-   the modern runtime's shorter list. The trace retracts the discarded sites.
+   the modern runtime's shorter list. The trace reports the discarded child
+   list as one `elided` range.
    Probes: `1x void root children`, `1x noscript root children`, `1x nested
    void children with dynamic attribute`, `1x nested noscript children with
    dynamic attribute`, and the four `1x legacy void …` position/value forms.

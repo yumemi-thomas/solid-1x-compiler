@@ -90,6 +90,10 @@
 
 ### Patch Changes
 
+- Report void-element and `<noscript>` child lists as one elided semantic-trace
+  range. Consumers can now prove that calls anywhere in the discarded subtree
+  do not execute instead of treating the compiler's silence as a census gap.
+
 - Match Babel 0.40.10's exact void-element vocabulary by treating its legacy
   `<keygen>` and `<menuitem>` tags as void. Their source children and promoted
   `children` values are now discarded in root and nested lowering, closing the
