@@ -2064,26 +2064,61 @@ const a = <div><span innerHTML={h()} children={x()} /></div>;
   // Babel guards the whole child recursion with `if (!voidTag) { … if
   // (tagName !== "noscript") transformChildren(…) }`, so a void or
   // `<noscript>` template root never lowers its *source* children at all.
-  // This compiler has no such gate on the general case (only the
-  // `children`-attribute promotion carries it), so it inserts anyway.
-  // Divergence 2 in docs/execution-contract.md.
+  // Pin both root and dynamic nested paths: the Rust port must discard the
+  // same child lists rather than merely fixing one position.
   "1x void root children": `
 const a = <br>{c()}</br>;
 `,
   "1x noscript root children": `
 const a = <noscript>{c()}</noscript>;
 `,
-  // The dynamic-`textContent` placeholder push (children.rs / element.rs)
-  // carries no void-element or `<noscript>` check at all, unlike every other
-  // gate in this file, so it adds a placeholder space text node to a void or
-  // `<noscript>` element's template that Babel never emits. Pre-existing and
-  // byte-identical on `main`; not fixed by the `children`-attribute
-  // promotion. Divergence 7 in docs/execution-contract.md.
+  "1x nested void children with dynamic attribute": `
+const a = <div><br class={c()}>{d()}</br></div>;
+`,
+  "1x nested noscript children with dynamic attribute": `
+const a = <div><noscript class={c()}>{d()}</noscript></div>;
+`,
+  // Dynamic `textContent` must not synthesize a placeholder under a void or
+  // `<noscript>` element in either position.
   "1x br textContent placeholder": `
 const a = <br textContent={t()} />;
 `,
   "1x nested br textContent placeholder": `
 const a = <div><br textContent={t()} /></div>;
+`,
+  "1x input textContent placeholder": `
+const a = <input textContent={t()} />;
+`,
+  "1x nested input textContent placeholder": `
+const a = <div><input textContent={t()} /></div>;
+`,
+  "1x noscript textContent placeholder": `
+const a = <noscript textContent={t()} />;
+`,
+  "1x nested noscript textContent placeholder": `
+const a = <div><noscript textContent={t()} /></div>;
+`,
+  // `contextToCustomElements` is enabled in the DOM parity modes. Owner
+  // capture is position-independent in Babel.
+  "1x nested custom element owner context": `
+const a = <div><my-widget id={i()} /></div>;
+`,
+  "1x nested customized builtin owner context": `
+const a = <div><button is="my-button">{x()}</button></div>;
+`,
+  "1x nested slot owner context": `
+const a = <div><slot>{x()}</slot></div>;
+`,
+  // In hydratable mode Babel retains nested <head> markup, discards its setup,
+  // and emits NoHydration only when the child acquired a dynamic id.
+  "1x nested dynamic head markup": `
+const a = <div><head>{b()}</head></div>;
+`,
+  "1x nested static head markup": `
+const a = <div><head><title>t</title></head></div>;
+`,
+  "1x direct static head has no NoHydration call": `
+const a = <span><head>t</head></span>;
 `
 };
 
@@ -2102,7 +2137,9 @@ const referenceRejected = new Set([
   "ssr/1x reserved namespaces before spread",
   "ssr-hydratable/1x reserved namespaces before spread",
   "ssr/1x reserved namespaces around two spreads",
-  "ssr-hydratable/1x reserved namespaces around two spreads"
+  "ssr-hydratable/1x reserved namespaces around two spreads",
+  "dynamic/1x nested dynamic head markup",
+  "dynamic/1x direct static head has no NoHydration call"
 ]);
 
 function caseId(name) {

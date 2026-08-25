@@ -1042,25 +1042,30 @@ fn a_later_dynamic_text_content_takes_the_slot_from_a_children_attribute() {
     // Both write the one `children` local, and the attribute loop runs in
     // source order: `children = t.jsxText(" ")` wins here, so the captured
     // value is discarded and reported as such.
-    let source = "const C = () => <div><span children={value()} textContent={text()} /></div>;";
-    assert_eq!(
-        sites(source),
-        [
-            (
-                "value()",
-                ExecutionSiteKind::JsxChild,
-                value(ValueDecision::Elided)
-            ),
-            (
-                "text()",
-                ExecutionSiteKind::NativeAttribute,
-                value(ValueDecision::ReactiveRerun)
-            ),
-        ]
-    );
-    let emitted = emitted(source);
-    assert!(!emitted.contains("_$insert"));
-    assert!(emitted.contains("<div><span> "));
+    for source in [
+        "const C = () => <span children={value()} textContent={text()} />;",
+        "const C = () => <div><span children={value()} textContent={text()} /></div>;",
+    ] {
+        assert_eq!(
+            sites(source),
+            [
+                (
+                    "value()",
+                    ExecutionSiteKind::JsxChild,
+                    value(ValueDecision::Elided)
+                ),
+                (
+                    "text()",
+                    ExecutionSiteKind::NativeAttribute,
+                    value(ValueDecision::ReactiveRerun)
+                ),
+            ],
+            "{source}"
+        );
+        let emitted = emitted(source);
+        assert!(!emitted.contains("_$insert"), "{source}");
+        assert!(emitted.contains("<span> "), "{source}");
+    }
 }
 
 #[test]
@@ -1230,19 +1235,18 @@ fn a_dynamic_text_content_keeps_real_children_in_the_template() {
 }
 
 #[test]
-fn a_literal_only_capture_is_dropped_without_falling_back_to_an_earlier_one() {
+fn a_confident_non_text_capture_is_folded_and_inserted() {
     // Babel's capture keeps the last attribute that reaches `children = value`,
-    // and `{null}`/`{true}`/`{{ a: 1 }}` all reach it. This compiler does not
-    // lower such a value (Babel inserts it — a divergence recorded in
-    // docs/execution-contract.md), but it must drop it rather than promote the
-    // *earlier* `children` attribute Babel's own capture already discarded:
-    // that would insert a value Babel never inserts.
+    // and `{null}`/`{true}`/`{{ a: 1 }}` all reach it. Babel folds and inserts
+    // that selected value; the earlier dynamic value remains discarded.
     for source in [
         "const C = () => <div children={value()} children={null} />;",
         "const C = () => <div><span children={value()} children={true} /></div>;",
         "const C = () => <div><span children={value()} children={{ a: 1 }} /></div>;",
     ] {
-        assert!(!emitted(source).contains("_$insert"), "{source}");
+        let code = emitted(source);
+        assert!(code.contains("_$insert"), "{source}");
+        assert!(!code.contains("value()"), "{source}");
     }
 }
 
@@ -1337,23 +1341,14 @@ fn a_discarded_noscript_leaves_its_siblings_sites_intact() {
 }
 
 #[test]
-fn a_noscript_this_compiler_does_lower_keeps_its_sites() {
-    // The two positions the static fast path does not own. Both diverge from
-    // Babel, which emits nothing for either; the trace stays truthful about
-    // *this* compiler, so the sites stay and carry the decision the emitted
-    // code really implements.
+fn every_noscript_lowering_discards_its_children_like_babel() {
+    // Root and attribute-driven nested paths use the same Babel gate as the
+    // static fast path: the element remains, but its child list is unvisited.
     //
     // A `<noscript>` template root:
     let root = "const C = () => <noscript>{value()}</noscript>;";
-    assert_eq!(
-        sites(root),
-        [(
-            "value()",
-            ExecutionSiteKind::JsxChild,
-            value(ValueDecision::ReactiveRerun)
-        )]
-    );
-    assert!(emitted(root).contains("_$insert"));
+    assert_eq!(sites(root), []);
+    assert!(!emitted(root).contains("_$insert"));
 
     // A nested `<noscript>` whose attributes push it onto the dynamic path:
     for source in [
@@ -1362,22 +1357,19 @@ fn a_noscript_this_compiler_does_lower_keeps_its_sites() {
         "const C = () => <div><noscript onClick={h}>{value()}</noscript></div>;",
     ] {
         assert!(
-            sites(source).contains(&(
-                "value()",
-                ExecutionSiteKind::JsxChild,
-                value(ValueDecision::ReactiveRerun)
-            )),
+            !sites(source).iter().any(|(text, _, _)| *text == "value()"),
             "{source}"
         );
-        assert!(emitted(source).contains("_$insert"), "{source}");
+        assert!(!emitted(source).contains("_$insert"), "{source}");
     }
 }
 
 #[test]
 fn a_hydratable_head_retracts_the_sites_inside_it() {
-    // The element becomes `createComponent(NoHydration, {})` and nothing else:
-    // its attributes are never lowered either, so a `ref` or handler written
-    // on the `<head>` itself is retracted alongside its children.
+    // Dynamic nested heads retain their static markup shell but, like roots,
+    // replace all setup with `createComponent(NoHydration, {})`; attributes
+    // and children are retracted even when discarded lowering registered an
+    // otherwise-unused helper import.
     for source in [
         "const C = () => <head>{value()}</head>;",
         "const C = () => <head ref={r}>{value()}</head>;",
@@ -1391,7 +1383,7 @@ fn a_hydratable_head_retracts_the_sites_inside_it() {
         assert_eq!(hydratable_sites(source), [], "{source}");
         let code = hydratable_emitted(source);
         assert!(code.contains("_$NoHydration"), "{source}");
-        for absent in ["_$insert", "_$use", "_$delegateEvents"] {
+        for absent in ["_$insert(", "_$use("] {
             assert!(!code.contains(absent), "{source} still emits {absent}");
         }
     }

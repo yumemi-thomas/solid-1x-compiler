@@ -102,38 +102,22 @@ question two independent derivations get differently. It is recorder-internal:
 no serialized field carries it, and `SemanticTrace` looks the same as if the
 census had never enumerated those sites.
 
-Three paths in the DOM lowering discard a subtree, and each calls it:
+The parity-clean discard paths are:
 
-- the `<noscript>` static-template fast path, which emits the tag and returns
-  without visiting the children (`dom/static_template.rs`) — parity-clean,
-  since Babel guards its own recursion the same way;
-- a hydratable `<head>` that is the direct child of a native element, replaced
-  by a bare `createComponent(NoHydration, {})` (`dom/children.rs`) —
-  markup-only against Babel, execution-parity-clean (divergence 9 below);
-- a hydratable `<head>` reaching `lower_element` in any other *dynamic*
-  position — a template root, a component child, a conditional branch — same
-  replacement (`dom/element.rs`) — markup-only against Babel, same as above.
+- every void-element and `<noscript>` child list, at a template root, in the
+  static-template fast path, and in the dynamic nested path;
+- a hydratable `<head>` template root (or another expression-position head)
+  replaced by `createComponent(NoHydration, {})` before attribute or child
+  lowering;
+- the setup arrays of a dynamic hydratable `<head>` nested under a native
+  element. That path deliberately lowers far enough to retain Babel's head
+  markup, then discards the declarations, operations and dynamics and emits
+  the same bare `NoHydration` call Babel does.
 
-All three are the paths `retract_within` withdraws sites for, and all three are
-execution-faithful against Babel: nothing a consumer can observe through the
-trace's terminal decisions differs between the two compilers at any of them.
-
-These three do not cover every way a hydratable `<head>` can be nested. One
-that is folded into an ancestor's markup by the static-template fast path
-reaches neither `<head>` path at all — the fast path's own recursion has no
-`<head>`/`hydratable` awareness, so it just serializes the head like any other
-element. That is exact parity for the "deep-static" shape, because a literal
-`<head>` has nothing dynamic inside it, so nothing inside it is ever a censused
-site to begin with — there is no fourth path here, only nothing to retract.
-`<div><span><head>t</head></span></div>` is byte-identical between the two
-compilers, with neither emitting a `createComponent` call. But a *literal*
-`<head>` reached directly by one of the two replacement paths above still
-triggers the replacement regardless, because neither path's `hydratable && tag
-== "head"` check looks at whether the head has any dynamic content: for
-`<span><head>t</head></span>` alone this compiler still emits
-`createComponent(NoHydration, {})`, while Babel's gate for that push is never
-set — nothing inside is dynamic — so Babel emits no call at all. That sub-case
-*is* an execution divergence; see divergence 9.
+A static nested hydratable `<head>` is not a discard path: it stays in the
+template and produces no `NoHydration` call, exactly like Babel. The focused
+probes cover dynamic markup, nested static markup, and the direct-static
+`child.id` gate.
 
 The `<head>` paths retract over the whole *element*, not its child list: the
 replacement runs before attribute lowering, so a `ref` or handler written on the
@@ -151,12 +135,9 @@ the call order-independent, where an inclusive range would quietly depend on
 whether the parent recorded its decision before or after the discarding path
 ran.
 
-Retraction is a claim about a *path*, not about a tag name. Every `<noscript>`
-position this compiler really does lower — a template root, and a nested
-`<noscript>` whose attributes push it off the static fast path — keeps its
-sites, even though Babel emits nothing for either (divergences 2 and 8 below).
-Under-reporting to match Babel would make the trace lie about the code this
-compiler actually generated.
+Retraction is a claim about a *path*, not merely a tag name. The compiler now
+applies Babel's void/`<noscript>` recursion gates in every native position;
+attributes on the element may still lower, but no source child site survives.
 
 Non-hydratable nested `<head>` is the one discard-shaped case handled the other
 way round, and it is genuinely a different shape: its static children *do* reach
@@ -282,144 +263,50 @@ regenerated baseline then grows by exactly those entries and nothing else.
 ## Where this compiler and Babel 1.x still differ
 
 These are measured against the vendored `babel-plugin-jsx-dom-expressions`
-oracle. Divergences 1–7 each have a probe under
-`__tests__/parity/expected-probes/`, so each is ratcheted rather than merely
-written down; 8 and 9 were measured against the same oracle but are not in the
-probe corpus yet, and each says why. The trace reports what *this* compiler does
-at every one of them, faithfully; a consumer reasoning about Babel-compiled
-output should read them as the list of places where the two answers are not the
-same.
+oracle. The behavioral divergences below are resolved and their differential
+artifacts were deleted only after the affected modes reached byte parity. One
+output-shape difference remains ratcheted: the redundant inner IIFE described
+in item 5. The trace reports this compiler's actual output at that shape.
 
-1. **A template root's `children` attribute ignores a later dynamic
-   `textContent`.** Both attributes write Babel's single `children` slot in
-   source order, so `<div children={x()} textContent={t()}/>` keeps the
-   synthesized space text node and emits no insert. The root lowering promotes
-   the captured value before its attribute loop runs, so it has no position to
-   compare against and inserts anyway. The nested lowering does compare, and
-   agrees with Babel in both orders. Probe: `1x children attribute before
-   dynamic textContent`.
-2. **Void and `<noscript>` template roots still lower their source children.**
-   Babel guards the whole recursion — `if (!voidTag) { … if (tagName !==
-   "noscript") transformChildren(…) }` — so `<br>{c()}</br>`,
-   `<noscript>{c()}</noscript>` and `<noscript><span>s</span></noscript>` emit
-   nothing (and contribute no markup) there. This compiler inserts, and keeps
-   static children in the template. Only the `children`-attribute *promotion*
-   carries those two gates, in both positions; the general case is untouched.
-   Probes: `1x void root children`, `1x noscript root children`.
-
-   Nested positions agree with Babel only where the static-template fast path
-   owns them — a nested `<noscript>` whose attributes are all inlinable really
-   does discard its children (measured parity in all four dom modes for
-   `<div><noscript>{c()}</noscript></div>`, `<div><noscript><span>s</span>
-   </noscript></div>` and a `ref` nested in the discarded subtree). The two
-   nested cases that do *not* reach it are divergences of their own; see
-   divergence 8.
-3. **A `children` value this compiler folds confidently is dropped where Babel
-   inserts it.** Babel's capture takes any container value that is not a string
-   or number after `evaluateAndInline`, so `children={null}`,
-   `children={undefined}`, `children={true}` and `children={{ a: 1 }}` become
-   `_$insert(el, null)` and friends. Here the capture is filtered by
-   `evaluate_confident`, which is confident about all four, so nothing is
-   emitted. Position-independent. The selection is still Babel's — the last
-   attribute Babel's capture keeps — and a capture dropped this way does *not*
-   fall back to an earlier `children` attribute, because Babel's own capture
-   already overwrote it: falling back would insert a value Babel never inserts.
-   Probes: `1x children attribute nested undefined`, `… nested boolean
-   literal`, `… nested confident object`, `1x duplicate children attributes
-   trailing null`, `… nested trailing boolean`.
-4. **A constant-foldable non-text value reaches the runtime unfolded.**
-   `children={1 === 1}` inserts `true` in Babel, which rewrote the node before
-   lowering, and `1 === 1` here. Independent of position and of generate — the
-   ssr and universal modes diverge on the same probe. Probe: `1x children
-   attribute nested constant folded boolean`.
+1. **Resolved — template-root `children`/`textContent` slot order.** Both
+   attributes write Babel's single `children` slot in source order, so
+   `<div children={x()} textContent={t()}/>` keeps the synthesized space text
+   node and emits no insert. Template-root lowering now applies the same
+   dynamic-last-writer check as the nested path. The focused trace regression
+   pins both positions, and the probe `1x children attribute before dynamic
+   textContent` is byte-identical to Babel in DOM, hydratable DOM,
+   no-inline-styles DOM, and dynamic DOM output.
+2. **Resolved — void and `<noscript>` child recursion.** Root and nested
+   lowering now apply Babel's gates before visiting source children, including
+   attribute-driven nested paths. The trace retracts the discarded sites.
+   Probes: `1x void root children`, `1x noscript root children`, `1x nested
+   void children with dynamic attribute`, and `1x nested noscript children with
+   dynamic attribute`.
+3. **Resolved — confidently folded non-text `children`.** `null`, `undefined`,
+   booleans and confident object values now write Babel's child slot and are
+   inserted after folding; string and numeric folds remain literal attributes.
+   Duplicate selection still follows Babel's source-order slot semantics.
+4. **Resolved — folded child value emission.** A value such as
+   `children={1 === 1}` now reaches insertion as `true`, matching Babel's
+   `evaluateAndInline` preprocessing.
 5. **A JSX-valued hole loses Babel's inner IIFE.** Babel emits
    `() => (() => {…})()` where this compiler emits `() => {…}`, for
    `children={<b>{x()}</b>}` as for any other JSX-valued hole, in every
    position and in the universal modes too. Probe: `1x children attribute
    nested jsx value`.
-6. **A nested custom element emits no `_$owner` context assignment.**
-   `should_capture_custom_element_context` runs only at the template root, so
-   `<div><my-el children={x()}/></div>` gets the insert but not the owner
-   write. Pre-existing; promoting the nested `children` value is what made it
-   visible. Probe: `1x children attribute nested custom element`.
-7. **A dynamic `textContent` placeholder is pushed without a void/`<noscript>`
-   gate.** The placeholder push in `children.rs` and its companion call in
-   `element.rs` carry no void-element or `<noscript>` check at all, unlike
-   every gate above, so a dynamic `textContent` on one of those elements gets
-   an extra placeholder space text node Babel never emits:
-   `<div><br textContent={t()}/></div>` is Babel's `` `<div><br>` `` against
-   this compiler's `` `<div><br> ` `` (trailing space), and the same one-space
-   difference shows for a root `<br textContent={t()}/>`,
-   `<div><noscript textContent={t()}/></div>`, `<div><input
-   textContent={t()}/></div>`, and with a `children={x()}` sibling on the same
-   element. Pre-existing and byte-identical on `main` before this branch — the
-   `children`-attribute promotion never touches this path, so it is scoped out
-   of this change rather than fixed here. Probes: `1x br textContent
-   placeholder`, `1x nested br textContent placeholder`.
-8. **A nested `<noscript>` pushed off the static fast path, or a nested void
-   element, lowers its children.** Babel's `if (tagName !== "noscript")
-   transformChildren(…)` gate is on `transformElement`, so it holds in *every*
-   position and whatever the attributes are. Here the gate is a property of
-   the static-template fast path
-   (`static_template.rs`), which any attribute that cannot inline into the
-   markup rejects — a `class={c()}`, a `style` object, a `ref`, an `on*`
-   handler. The element then takes the dynamic child path, which lowers the
-   children like any other element's, so `<div><noscript
-   class={c()}>{d()}</noscript></div>` emits an `_$insert` Babel does not, in
-   all four dom modes; measured the same for `ref`, `onClick` and a `style`
-   object. A nested void element diverges the same way and always has, since no
-   fast path claims it: `<div><br>{c()}</br></div>` inserts here and emits
-   nothing in Babel. Pre-existing in both cases. The trace reports the insert
-   rather than hiding it, so a consumer sees the code this compiler generated —
-   see "Discarded subtrees". No probes yet: adding them means ratcheting four
-   dom-mode diffs per shape, which is a separate change.
-9. **A hydratable nested `<head>` loses its markup to Babel, not its
-   execution.** Babel only returns early from `transformElement` for a `head`
-   at `info.topLevel`; a nested one is transformed normally, and it is the
-   *parent's* `transformChildren` that overrides what happens with the
-   child's result (`if (child.tagName === "head")`) — after `results.template
-   += child.template` has already taken the markup. That override only runs
-   when the head has some dynamic content (`child.id` is set); when it runs
-   under `hydratable`, it discards the head's own declarations, exprs and
-   dynamics and instead pushes the *same* bare `createComponent(NoHydration,
-   {})` call this compiler synthesizes for the same shape — not an insert; the
-   `import { insert }` this shape pulls in is otherwise unused. So
-   `<div><head>{b()}</head></div>` is Babel's `` `<div><head>` `` plus that one
-   `createComponent(NoHydration, {})` call against this compiler's ``
-   `<div>` `` plus the identical call: the markup differs, but the same single
-   expression runs in both, so the divergence taints no site's decision —
-   markup-only, execution-parity-clean.
-   `<div><head><title>t</title></head></div>` loses the `<title>t` markup the
-   same way, with execution equally unaffected.
-
-   Measured in `dom-hydratable` only; the other three dom modes are parity
-   because they go through the *non-hydratable* discard in "Discarded
-   subtrees" above (`dropped_ranges` plus `suppress()`), which drops the
-   head's setup expressions in every mode this compiler has — not because a
-   non-hydratable `<head>` becomes an ordinary native root that lowers
-   normally. A `<head>` directly under `<html>` is parity in every dom mode,
-   and so is a `<head>` template root, where Babel's own early return matches
-   this one exactly.
-
-   A hydratable `<head>` folded into an ancestor's markup by the
-   static-template fast path reaches neither replacement path at all and is
-   exact parity: `<div><span><head>t</head></span></div>` is byte-identical
-   between the two compilers (see "Discarded subtrees"). But a *literal*
-   `<head>` reached directly by one of the two replacement paths still
-   triggers the replacement, because neither path checks whether the head has
-   dynamic content before firing: for `<span><head>t</head></span>` alone this
-   compiler still emits `createComponent(NoHydration, {})`, while Babel's
-   `child.id` gate for that push is never set — nothing inside is dynamic — so
-   Babel emits no call at all. Unlike the general case above, that sub-case
-   *is* an execution divergence, not merely a markup one.
-
-   Pre-existing. The trace retracts the discarded interior because *this*
-   compiler emits nothing for it — see "Discarded subtrees". No probes yet, for
-   the same reason as divergence 8; `<Comp><head>{b()}</head></Comp>` would
-   additionally need the suite's `referenceRejected` set, since Babel 1.x
-   throws on it (`Property body of ArrowFunctionExpression expected node to be
-   of a type ["BlockStatement","Expression"] but instead got
-   "ExpressionStatement"`).
+6. **Resolved — nested custom-element owner context.** Native custom elements,
+   customized built-ins, and slots now receive the same owner assignment in
+   nested dynamic lowering as at the template root.
+7. **Resolved — void/`<noscript>` text placeholders.** Dynamic `textContent`
+   no longer synthesizes a space child where Babel skips child recursion.
+8. **Resolved with item 2 — nested void and `<noscript>` paths.** The gate is
+   now independent of whether the static-template fast path accepted the
+   element.
+9. **Resolved — hydratable nested `<head>`.** Static head markup is retained
+   without a `NoHydration` call. Dynamic head markup is retained while its
+   setup arrays are discarded and replaced by the bare call Babel emits.
+   Probes cover dynamic markup, nested static markup, and the direct-static
+   `child.id` gate; dynamic-mode reference rejections are recorded explicitly.
 
 Two more shapes were measured while confirming the list and are recorded
 without probes of their own, so they are not mistaken for parity: nested is
